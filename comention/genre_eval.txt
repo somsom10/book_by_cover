@@ -1,0 +1,48 @@
+Graph:      6930 authors, 201 communities
+Profiles:   30558 authors in author_genres.csv (74 genres)
+Covered:    5376 graph authors have one (77.6%), 5103 of them in a community
+
+Genre similarity within a community   (cosine of the genre profiles, 0-1)
+                                        mean  median     pairs
+  two authors in one community         0.511   0.519   148,910
+  (this is the statistic tested below; its mean is the pooled one, weighted by each community's pair count)
+
+Permutation test (2000 shuffles of the community labels, sizes held)
+  observed 0.511   null 0.112 ± 0.0009   z = +437.5   p < 0.0005
+  null range 0.109-0.115, so no shuffle came near the real partition
+
+Per community (139 with >= 5 covered members)
+  above its size-matched null: 139/139   beyond it (z > 2): 137/139
+  median genre similarity 0.389 vs. 0.112 expected · median purity 0.41
+
+By community size (covered members, since that is what is scored)
+  size       groups  median sim  median z  > null   z > 2  median purity
+  2-4            48       0.640       4.1    88%     67%           0.67
+  5-9            19       0.551       6.6   100%     95%           0.60
+  10-24          50       0.334       8.0   100%     98%           0.36
+  25-49          34       0.348      15.1   100%    100%           0.40
+  50+            36       0.509      35.1   100%    100%           0.51
+  all 187 scored communities have >= 2 covered members; the 14 others cannot be scored at all
+
+Most genre-coherent
+  G148    5/5    sim 0.99  z +12.7  pure 1.00  Catherine Mann, Kathie DeNosky, Mi  romance 0.82, short stories 0.03, western 0.03
+  G150    5/5    sim 0.98  z +12.3  pure 1.00  James M. McPherson, Harold Holzer,  history 0.75, biography & memoir 0.07, war & military 0.07
+  G131    8/8    sim 0.97  z +19.3  pure 1.00  Barbara D'Amato, Elaine Viets, Har  mystery 0.79, thriller 0.05, crime 0.02
+  G121   12/12   sim 0.97  z +25.0  pure 1.00  Jane Porter, Katherine Garbera, Me  romance 0.73, short stories 0.07, chick lit 0.05
+  G145    5/5    sim 0.92  z +11.8  pure 1.00  Ann Tatlock, Loree Lough, Virginia  religion 0.48, romance 0.19, historical fiction 0.12
+  G134    8/8    sim 0.85  z +16.6  pure 0.88  Philip K. Dick, William Gibson, Le  science fiction 0.48, short stories 0.16, fantasy 0.14
+  G0    164/177  sim 0.80  z +102.7  pure 0.90  Contemporary American poetry        poetry 0.71, biography & memoir 0.04, short stories 0.03
+  G2    102/151  sim 0.79  z +79.5  pure 0.88  Comics: canon & superhero           comics 0.67, fantasy 0.04, science fiction 0.04
+  G122    8/11   sim 0.79  z +14.9  pure 0.88  Milton Glaser, Stefan Sagmeister,   art 0.63, children's 0.13, business & economics 0.05
+  G20    76/85   sim 0.73  z +60.1  pure 0.82  Golden Age SF                       science fiction 0.52, short stories 0.13, fantasy 0.09
+
+Least genre-coherent
+  G54    36/42   sim 0.16  z  +2.9  pure 0.11  The New Yorker institution          business & economics 0.11, film 0.10, short stories 0.07
+  G77    16/29   sim 0.16  z  +1.9  pure 0.12  Mark Twain, Bret Harte, Nikola Tes  religion 0.11, biography & memoir 0.09, history 0.09
+  G15    38/94   sim 0.18  z  +4.5  pure 0.26  Golden-age Hollywood                biography & memoir 0.19, film 0.10, children's 0.06
+  G97    15/20   sim 0.19  z  +2.6  pure 0.13  George Bernard Shaw, Walter Scott,  classics 0.17, poetry 0.12, children's 0.09
+  G31    61/70   sim 0.19  z  +6.2  pure 0.25  Big-house US literary               children's 0.19, psychology 0.09, short stories 0.07
+  G90    19/22   sim 0.19  z  +3.4  pure 0.26  Irish modernists                    mystery 0.21, irish 0.07, classics 0.06
+  G85    12/25   sim 0.20  z  +2.6  pure 0.17  Jazz & soul                         biography & memoir 0.16, historical fiction 0.12, music 0.11
+  G108   14/17   sim 0.20  z  +3.0  pure 0.21  Charles Dickens, Matthew Costello,  mystery 0.14, children's 0.10, historical fiction 0.08
+

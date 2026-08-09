@@ -1,0 +1,13 @@
+# Raw data: ~10 GB, fetched by download/fetch_data.py
+comention/goodreads/
+comention/goodreads_books.json
+comention/goodreads_books.json.gz
+
+# Large regenerable intermediates (rebuild with `python3 main.py`)
+comention/author_genres.csv
+comention/blurb_mentions.csv
+comention/blurb_mentions_clean.csv
+
+__pycache__/
+*.pyc
+.claude/
