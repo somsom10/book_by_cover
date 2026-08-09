@@ -40,7 +40,7 @@ project, and is here so one script sets up everything.
 ## Pipeline
 
 ```
-python3 main.py          # the whole thing, ~28 min from scratch
+python3 main.py          # the whole thing, ~2 min once the data is on disk
 python3 main.py --dry-run / --force / --only STAGE / --from STAGE
 ```
 
@@ -53,14 +53,18 @@ re-run more than it needs.
 The stages, also runnable on their own, in order:
 
 ```
-build_author_id_map.py    ~5 min    -> author_id_names.csv
-build_author_genres.py    ~7 min    -> author_genres.csv
-build_blurb_mentions.py   ~15 min   -> blurb_mentions.csv
-filter_mentions.py        seconds   -> blurb_mentions_clean.csv
-comention.py              ~1 min    -> edges, groups, titles
-viz_variants.py           ~30 s     -> the two network figures
-eval_genres.py            seconds   -> the genre evaluation
+build_author_id_map.py    ~15 s   -> author_id_names.csv
+build_author_genres.py    ~40 s   -> author_genres.csv
+build_blurb_mentions.py   ~55 s   -> blurb_mentions.csv
+filter_mentions.py         ~1 s   -> blurb_mentions_clean.csv
+comention.py               ~4 s   -> edges, groups, titles
+viz_variants.py           ~11 s   -> the two network figures
+eval_genres.py             ~2 s   -> the genre evaluation
 ```
+
+Measured end to end on an NVMe laptop with the 8.6 GB JSON already in page
+cache. The three heavy stages each stream that whole file, so on slower storage
+they are bound by how fast it can be read, not by the work they do.
 
 `build_author_genres.py` sits second only because `main.py` re-runs everything
 downstream of a stage that re-ran; its output is not used until the last stage.

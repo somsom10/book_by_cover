@@ -43,7 +43,7 @@ STAGES = [
           "name the author_ids (joins the CSV dump to the JSON dump)",
           outputs=["author_id_names.csv"],
           data=["goodreads/book*.csv", "goodreads_books.json"],
-          code=["name_filters.py"], minutes="~5 min"),
+          code=["name_filters.py"], minutes="~20 s"),
     # Second, not last, although the evaluation it feeds is the last thing that
     # happens: a stage re-runs when anything before it re-ran, so parking this
     # one after the figures would put a 7-minute pass over the 9 GB JSON behind
@@ -53,13 +53,13 @@ STAGES = [
           outputs=["author_genres.csv"],
           data=["goodreads_books.json"],
           inputs=["author_id_names.csv"],
-          code=["genre_vocab.py"], minutes="~7 min"),
+          code=["genre_vocab.py"], minutes="~40 s"),
     Stage("mentions", "build_blurb_mentions.py",
           "extract author mentions from every blurb",
           outputs=["blurb_mentions.csv"],
           data=["goodreads/book*.csv", "goodreads_books.json"],
           inputs=["author_id_names.csv"],
-          code=["name_filters.py"], minutes="~15 min"),
+          code=["name_filters.py"], minutes="~10 s"),
     Stage("filter", "filter_mentions.py",
           "drop organisations and non-literary figures",
           outputs=["blurb_mentions_clean.csv"],
@@ -73,14 +73,14 @@ STAGES = [
           # the summaries file supplies the group titles, so editing a title
           # is a reason to rewrite the group files
           code=["name_filters.py", "author_group_summaries.md"],
-          minutes="~1 min"),
+          minutes="~10 s"),
     Stage("variants", "viz_variants.py",
           "draw the two network figures (the 7 big communities, everything)",
           outputs=["comention_groups_full.png", "comention_all.png"],
           # reads the previous stage's CSVs, never the raw dumps
           inputs=["comention_author_edges.csv", "author_groups.csv"],
           code=["viz_common.py"],
-          minutes="~1 min"),
+          minutes="~10 s"),
     Stage("evaluate", "eval_genres.py",
           "test the communities against the genre profiles",
           outputs=["community_genres.csv", "genre_eval.txt", "genre_eval.png"],
