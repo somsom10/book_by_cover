@@ -8,10 +8,11 @@ Three sources, one per thing the repo needs:
 
   goodreads_books.json  UCSD Book Graph -- blurbs and author_ids, for
                         comention/. Direct download, 2.0 GB -> 8.6 GB on disk.
-  goodreads/*.csv       Kaggle -- author names and popularity, for comention/.
-                        Kaggle needs an account, so this one cannot be fully
-                        automated; the script uses the `kaggle` CLI if it is
-                        set up and prints manual instructions if not.
+  goodreads/*.csv       author names and popularity, for comention/. Shipped
+                        in download/goodreads_columns/ as the three columns the
+                        pipeline reads (19.8 MB gzipped, vs 1.1 GB for the full
+                        Kaggle dump, which needs an account) -- so this is
+                        unpacked, not downloaded. See that folder's README.
   booksummaries.txt     CMU Book Summary Dataset -- plot summaries with genre
                         and publication date, for year_genre_prediction/.
                         Direct download, 16 MB.
@@ -39,6 +40,7 @@ JSON_GZ_BYTES = 2_083_197_934          # verified against the server
 JSON_BYTES = 9_202_235_168             # after gunzip
 
 KAGGLE_SLUG = "bahramjannesarr/goodreads-book-datasets-10m"
+BUNDLED = Path(__file__).resolve().parent / "goodreads_columns"
 CSV_DIR = ROOT / "goodreads"
 CSV_MIN_FILES = 23                     # the dump ships 23 book*.csv (plus 7
                                        # user_rating_*.csv the pipeline never reads)
@@ -133,6 +135,19 @@ def get_csvs():
     if len(have) >= CSV_MIN_FILES:
         print(f"goodreads/*.csv: present ({len(have)} files)")
         return
+    # Prefer the columns committed to this repo: no Kaggle account needed, and
+    # they are unpacked as plain .csv so the pipeline reads what it always read.
+    packed = sorted(BUNDLED.glob("book*.csv.gz"))
+    if len(packed) >= CSV_MIN_FILES:
+        print(f"goodreads/*.csv  <- unpacking {len(packed)} files from "
+              f"{BUNDLED.name}/")
+        CSV_DIR.mkdir(parents=True, exist_ok=True)
+        for gz in packed:
+            with gzip.open(gz, "rb") as fi, open(CSV_DIR / gz.name[:-3], "wb") as fo:
+                shutil.copyfileobj(fi, fo, 1 << 20)
+        print(f"  done, {len(list(CSV_DIR.glob('book*.csv')))} csv files")
+        return
+
     if not shutil.which("kaggle"):
         print("goodreads/*.csv: MISSING, and the kaggle CLI is not installed.")
         print(MANUAL)

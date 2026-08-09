@@ -27,12 +27,17 @@ is 16 MB and the Goodreads dumps are ~10 GB.
 |---|---|---|---|
 | `booksummaries.txt` | year_genre_prediction | 41 MB | [CMU Book Summary Dataset](https://www.cs.cmu.edu/~dbamman/booksummaries.html) |
 | `goodreads_books.json` | comention | 8.6 GB | [UCSD Book Graph](https://mcauleylab.ucsd.edu/public_datasets/gdrive/goodreads/) |
-| `goodreads/book*.csv` | comention | 1.2 GB | [Kaggle](https://www.kaggle.com/datasets/bahramjannesarr/goodreads-book-datasets-10m) |
+| `goodreads/book*.csv` | comention | 20 MB | in this repo, see below |
 
-The first two download directly. **The Kaggle dump needs an account** —
-`fetch_data.py` uses the `kaggle` CLI when configured and prints setup
-instructions when it isn't. Downloads resume if interrupted and are verified by
-size, so re-running after a failure is safe.
+The first two download directly, no account needed. The third is **already in
+the repo**: `download/goodreads_columns/` holds the three columns the pipeline
+actually reads, gzipped — 19.8 MB against 1.1 GB for the full Kaggle dump,
+which needs a login. `fetch_data.py` unpacks them, so a fresh clone runs
+end-to-end with no sign-up anywhere. Results are unchanged; the equivalence is
+verified in that folder's README.
+
+Downloads resume if interrupted and are verified by size, so re-running after a
+failure is safe.
 
 ## Dependencies
 
