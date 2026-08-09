@@ -2,16 +2,19 @@
 
     python3 fetch_data.py             # everything still missing
     python3 fetch_data.py --check     # report what is present, download nothing
-    python3 fetch_data.py --only json|csv
+    python3 fetch_data.py --only json|csv|cmu
 
-Two sources, because neither has what the other has (see README):
+Three sources, one per thing the repo needs:
 
-  goodreads_books.json  UCSD Book Graph -- blurbs and author_ids. Direct
-                        download, 2.0 GB gzipped -> 8.6 GB on disk.
-  goodreads/*.csv       Kaggle -- author names and popularity. Kaggle needs an
-                        account, so this one cannot be fully automated; the
-                        script uses the `kaggle` CLI if it is set up and prints
-                        manual instructions if not.
+  goodreads_books.json  UCSD Book Graph -- blurbs and author_ids, for
+                        comention/. Direct download, 2.0 GB -> 8.6 GB on disk.
+  goodreads/*.csv       Kaggle -- author names and popularity, for comention/.
+                        Kaggle needs an account, so this one cannot be fully
+                        automated; the script uses the `kaggle` CLI if it is
+                        set up and prints manual instructions if not.
+  booksummaries.txt     CMU Book Summary Dataset -- plot summaries with genre
+                        and publication date, for year_genre_prediction/.
+                        Direct download, 16 MB.
 
 Downloads resume if interrupted and are verified by size before use, so
 re-running after a failure is safe.
@@ -20,12 +23,15 @@ import argparse
 import gzip
 import shutil
 import subprocess
+import tarfile
 import sys
 import urllib.request
 from pathlib import Path
 
-# This script lives in download/; the data belongs next to the code it feeds.
-ROOT = Path(__file__).resolve().parent.parent / "comention"
+# This script lives in download/; each dataset goes next to the code it feeds.
+REPO = Path(__file__).resolve().parent.parent
+ROOT = REPO / "comention"
+YGP = REPO / "year_genre_prediction"
 
 JSON_URL = ("https://mcauleylab.ucsd.edu/public_datasets/gdrive/goodreads/"
             "goodreads_books.json.gz")
@@ -36,6 +42,10 @@ KAGGLE_SLUG = "bahramjannesarr/goodreads-book-datasets-10m"
 CSV_DIR = ROOT / "goodreads"
 CSV_MIN_FILES = 23                     # the dump ships 23 book*.csv (plus 7
                                        # user_rating_*.csv the pipeline never reads)
+
+CMU_URL = "https://www.cs.cmu.edu/~dbamman/data/booksummaries.tar.gz"
+CMU_DEST = YGP / "data" / "booksummaries.txt"
+CMU_BYTES = 43_461_583                 # md5 f8a38037d88988596bdc097c1ad4c65d
 
 
 
@@ -141,6 +151,26 @@ def get_csvs():
 
 
 
+def get_cmu():
+    if CMU_DEST.exists() and CMU_DEST.stat().st_size == CMU_BYTES:
+        print(f"{CMU_DEST.name}: present")
+        return
+    tgz = REPO / "booksummaries.tar.gz"
+    print(f"{CMU_DEST.name}  <- {CMU_URL}")
+    download(CMU_URL, tgz)
+    with tarfile.open(tgz) as t:
+        member = next(m for m in t.getmembers()
+                      if m.name.endswith("booksummaries.txt"))
+        member.name = CMU_DEST.name
+        CMU_DEST.parent.mkdir(parents=True, exist_ok=True)
+        t.extract(member, CMU_DEST.parent)
+    tgz.unlink()
+    got = CMU_DEST.stat().st_size
+    if got != CMU_BYTES:
+        raise SystemExit(f"{CMU_DEST.name}: expected {CMU_BYTES} bytes, got {got}")
+    print("  done")
+
+
 def check():
     j = ROOT / "goodreads_books.json"
     n = len(list(CSV_DIR.glob("book*.csv")))
@@ -148,6 +178,9 @@ def check():
         ("goodreads_books.json", j.exists() and j.stat().st_size == JSON_BYTES,
          human(j.stat().st_size) if j.exists() else "missing"),
         ("goodreads/*.csv", n >= CSV_MIN_FILES, f"{n} files"),
+        ("year_genre_prediction/data/booksummaries.txt",
+         CMU_DEST.exists() and CMU_DEST.stat().st_size == CMU_BYTES,
+         human(CMU_DEST.stat().st_size) if CMU_DEST.exists() else "missing"),
     ]
     for name, ok, detail in rows:
         print(f"  [{'ok' if ok else '  '}] {name:<26} {detail}")
@@ -158,7 +191,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--check", action="store_true",
                     help="report what is present, download nothing")
-    ap.add_argument("--only", choices=["json", "csv"])
+    ap.add_argument("--only", choices=["json", "csv", "cmu"])
     a = ap.parse_args()
 
     if a.check:
@@ -168,11 +201,13 @@ def main():
         get_json()
     if a.only in (None, "csv"):
         get_csvs()
+    if a.only in (None, "cmu"):
+        get_cmu()
 
     print("\nState:")
     ready = check()
     print("\nReady for `python3 main.py`." if ready else
-          "\nThe pipeline needs both Goodreads sources; see above.")
+          "\nSomething is still missing; see above.")
 
 
 if __name__ == "__main__":

@@ -11,3 +11,7 @@ comention/blurb_mentions_clean.csv
 __pycache__/
 *.pyc
 .claude/
+
+# year_genre_prediction: its dataset and its trained models / figures
+year_genre_prediction/data/
+year_genre_prediction/outputs/

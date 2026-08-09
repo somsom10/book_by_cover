@@ -1,0 +1,77 @@
+"""Run the whole project: fetch the data, then both pipelines.
+
+    python3 main.py                  # everything, in order
+    python3 main.py --check          # what data is present; runs nothing
+    python3 main.py --skip-download  # data is already in place
+    python3 main.py --only year_genre|comention
+
+Two independent pipelines on two different datasets:
+
+    year_genre_prediction/   CMU plot summaries -> genre and publication-year
+                             models. Needs booksummaries.txt (16 MB).
+    comention/               Goodreads blurbs -> author co-mention communities.
+                             Needs the two Goodreads dumps (~10 GB).
+
+Neither reads the other's data, so `--only` runs one without fetching the
+other's inputs. Each pipeline decides for itself what is already up to date:
+comention/main.py skips stages whose outputs are current, and re-running is
+cheap once the heavy stages have run.
+"""
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+FETCH = ROOT / "download" / "fetch_data.py"
+
+PIPELINES = {
+    # key: (directory, argv, what it needs fetched)
+    "year_genre": ("year_genre_prediction",
+                   ["main.py", "--data", "data/booksummaries.txt"], "cmu"),
+    "comention": ("comention", ["main.py"], None),
+}
+
+
+def run(argv, cwd, what):
+    """Run a step in its own directory; stop the whole thing if it fails."""
+    print(f"\n{'=' * 72}\n{what}\n  $ {' '.join(argv)}   (in {cwd.name}/)\n"
+          f"{'=' * 72}", flush=True)
+    r = subprocess.run([sys.executable, *argv], cwd=cwd)
+    if r.returncode != 0:
+        sys.exit(f"\n{what} failed (exit {r.returncode}); stopping.")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--check", action="store_true",
+                    help="report what data is present, run nothing")
+    ap.add_argument("--skip-download", action="store_true")
+    ap.add_argument("--only", choices=list(PIPELINES))
+    a = ap.parse_args()
+
+    if a.check:
+        sys.exit(subprocess.run([sys.executable, str(FETCH), "--check"]).returncode)
+
+    todo = [a.only] if a.only else list(PIPELINES)
+
+    if not a.skip_download:
+        # --only fetches just what that pipeline needs; the Goodreads dumps are
+        # ~10 GB, so don't pull them to run the CMU half.
+        needed = {PIPELINES[k][2] for k in todo}
+        if a.only and needed != {None}:
+            for what in sorted(x for x in needed if x):
+                run([str(FETCH), "--only", what], ROOT, f"fetch data ({what})")
+        else:
+            run([str(FETCH)], ROOT, "fetch data")
+
+    for key in todo:
+        d, argv, _ = PIPELINES[key]
+        run(argv, ROOT / d, key)
+
+    print("\nDone. Figures and outputs are in year_genre_prediction/outputs/ "
+          "and comention/.")
+
+
+if __name__ == "__main__":
+    main()
