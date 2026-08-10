@@ -1,13 +1,10 @@
 """
-הערכת התיחום, ובעיקר: יומן של מה הוסר ולמה, וניתוח כמה מזה היה תוכן אמיתי.
+Evaluates bounding: a log of what was removed, and how much was real content.
 
-השאלה "האם הסרנו בטעות עלילה?" ניתנת למדידה ולא רק לעיון, בזכות
-keyness_matched.pkl: 8,680 ספרים שלכל אחד מהם יש גם תקציר מו"ל מגודריידס
-וגם תיאור עלילה מוויקיפדיה. אם קטע שהוסר מהתקציר חולק הרבה מילים עם תיאור
-העלילה של *אותו ספר*, הקטע תיאר את העלילה וההסרה הייתה שגיאה.
-
-זה מה שהופך את היומן לכלי ולא לרשימה: לכל שורה בו יש ציון אובייקטיבי של
-"כמה תוכן היה כאן".
+"Did we cut plot by mistake?" is measurable thanks to keyness_matched.pkl -
+8,680 books with both a publisher blurb and a Wikipedia plot summary. If a
+removed span shares many words with the plot summary of the SAME book, that
+span was plot. Every row of the log carries that score.
 """
 
 import os
@@ -25,10 +22,10 @@ WEIGHTS = "keyness_word_weights.csv"
 LOG_PATH = "bounding_removed_log.csv"
 RULE_STATS = "bounding_rule_stats.csv"
 
-# משפט שחוזר מילה במילה במספר הזה של ספרים שונים אינו מתאר אף אחד מהם
+# a sentence repeated verbatim across this many books describes none of them
 REPEAT_MIN_DOCS = 5
-# קטע שהוסר וחולק לפחות שיעור זה ממילות התוכן שלו עם תיאור העלילה של אותו
-# ספר נחשב חשוד: כנראה הסרנו עלילה
+# a removed span sharing at least this fraction of its content words with the
+# same book's plot summary is suspect: we probably cut plot
 CONTENT_OVERLAP_ALERT = 0.50
 
 _WORD_RE = re.compile(r"[a-z][a-z']+")
@@ -46,7 +43,7 @@ def content_words(text):
 
 
 def load_weights():
-    """טוען את משקלי הרגיסטר אם קיימים; אחרת מחזיר מילון ריק."""
+    """Register weights if present, otherwise an empty dict."""
     if not os.path.exists(WEIGHTS):
         print(f"  ({WEIGHTS} not found - register-weight columns will be 0)")
         return {}
@@ -56,8 +53,8 @@ def load_weights():
 
 def repeated_sentences(texts, min_docs=REPEAT_MIN_DOCS):
     """
-    שיטה 2ב: הקבוצה נגזרת מהקורפוס ולא נכתבת ביד. זהו החלק היחיד מבין
-    שלוש השיטות שמוצא מו"לים שאיש לא רשם מראש.
+    Method 2b: derived from the corpus rather than hand-written, which is why it
+    finds publishers nobody listed.
     """
     counts = Counter()
     for t in texts:
@@ -101,7 +98,7 @@ def run(strict=False, limit=None):
             "reg_before": reg(before), "reg_after": reg(after),
         })
 
-        # היומן: כל קטע שהוסר, עם ציון אובייקטיבי לכמה תוכן היה בו
+        # the log: every removed span, scored for how much content it held
         for rm in res.removed:
             span = content_words(rm["text"])
             overlap = len(span & cmu_words) / len(span) if span else 0.0
@@ -182,7 +179,7 @@ def report(stats, L):
 
 
 def audit(L, top=25):
-    """הביקורת שהתבקשה: אילו הסרות היו למעשה תוכן, ומאיזה כלל הן באו."""
+    """Which removals were actually content, and which rule produced them."""
     print("\n" + "=" * 78)
     print("AUDIT - removed spans that look like real content")
     print("=" * 78)

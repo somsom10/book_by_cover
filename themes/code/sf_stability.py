@@ -1,16 +1,10 @@
 """
-מה בדיוק לא יציב בנושא, ומה כן.
+What exactly is unstable about a topic, and what is not.
 
-מדד השחזוריות שבפרויקט מודד דמיון קוסינוס בין *רשימות המילים* של הנושא
-בהתאמות שונות. הדוח אינו טוען דבר על רשימת מילים - הוא טוען על צורת העקומה
-לפי עשור. שני הדברים יכולים להיפרד: אם הגבול בין "חלל" ל"הרפתקה/פנטזיה" זז
-בין הרצה להרצה, רשימת המילים משתנה בעוד המגמה נשארת.
-
-הסקריפט מודד את שניהם על אותה קבוצת התאמות, באותה שיטת שיוך:
-  * השיוך בין הרצות הוא בקוסינוס של שורות H על אוצר המילים המשותף - בדיוק
-    כמו stability.py, כדי שהמספרים יהיו בני-השוואה למה שכבר מדווח.
-  * לכל נושא מדווחים גם הקוסינוס וגם המתאם בין עקומות העשורים, וגם המקרה
-    הגרוע ביותר מבין ארבע ההתאמות ולא רק הממוצע.
+The project's reproducibility metric compares WORD LISTS, but the writeup
+claims a curve shape. The two can come apart: if the boundary between space and
+adventure/fantasy moves, the word list changes while the trend survives. Both
+are measured here over the same refits, and both mean and worst case reported.
 """
 import numpy as np
 import pandas as pd
@@ -23,7 +17,7 @@ CORPUS = "themes_corpus_bounded.pkl"
 SEEDS = [42, 7, 13, 99]
 OUT = "sf_stability.csv"
 
-# כל נושא שהדוח מזכיר בסעיף התוצאות, ולא רק אלה שנוח לבדוק
+# every topic the writeup names in Results, not only the convenient ones
 REPORTED = {
     "T04": "detective", "T06": "war", "T13": "guides", "T21": "science fiction",
     "T08": "poetry", "T15": "hardboiled", "T20": "translation",
@@ -32,7 +26,7 @@ REPORTED = {
 
 
 def fit(df, seed):
-    """מדגם אימון משתנה, זרע NMF קבוע - המתודולוגיה של stability.py."""
+    """Varying training sample, fixed NMF seed - the stability.py method."""
     idx = []
     for _, g in df.groupby("Decade"):
         idx.extend(g.sample(min(len(g), TH.FIT_PER_DECADE), random_state=seed).index)
@@ -48,7 +42,7 @@ def fit(df, seed):
 
 
 def aligned(H, names, vocab_pos, n_vocab):
-    """מטריצת H מנורמלת ומוטלת על אוצר מילים משותף, כדי שקוסינוס יהיה מוגדר."""
+    """H normalised onto a shared vocabulary, so cosine is defined."""
     M = np.zeros((H.shape[0], n_vocab))
     for c, w in enumerate(names):
         j = vocab_pos.get(w)
@@ -67,12 +61,13 @@ def main():
     runs = [fit(df, s) for s in SEEDS]
     print(f"{len(runs)} refits, K={TH.N_TOPICS}, {len(df):,} documents\n")
 
-    # אוצר מילים משותף לכל ההרצות, כולל ההתאמה המפורסמת שמשמשת כעוגן
+    # vocabulary shared by every run, including the anchor run
     vocab = sorted(set.intersection(*[set(names) for names, _, _ in runs]))
     pos = {w: i for i, w in enumerate(vocab)}
     Hs = [aligned(H, names, pos, len(vocab)) for names, H, _ in runs]
 
-    # העוגן הוא ההתאמה הראשונה; הנושא המפורסם מזוהה בה לפי חפיפת מילים
+    # the anchor is the first refit; the reported topic is located in it by
+    # word overlap
     anchor_names, anchor_H, anchor_W = runs[0]
     anchor = {}
     for tid in REPORTED:
@@ -87,7 +82,7 @@ def main():
         ref_curve = ref_sh.loc[decades, tid].values
         cos_list, cor_list = [], []
         for k in range(1, len(runs)):
-            sim = Hs[0][a] @ Hs[k].T          # קוסינוס מול כל נושא בהרצה k
+            sim = Hs[0][a] @ Hs[k].T          # cosine against every topic in run k
             m = int(sim.argmax())
             cos_list.append(float(sim[m]))
             W = runs[k][2]

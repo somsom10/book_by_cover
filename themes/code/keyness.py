@@ -1,16 +1,14 @@
 """
-Keyness: אילו מילים שכיחות בעקביות בתקצירי Goodreads ולא בתקצירי CMU,
-**באותם ספרים עצמם**.
+Keyness: which words are consistently common in Goodreads blurbs but not in
+CMU plot summaries, FOR THE SAME BOOKS.
 
-הרעיון: תקציר Goodreads הוא טקסט שיווקי שכתב מו"ל, ותקציר CMU הוא תיאור
-עלילה שכתב קורא בוויקיפדיה. אם משווים את שני התיאורים של *אותו* ספר, כל
-הבדל בין אוצר המילים אינו יכול לנבוע מהעלילה - העלילה זהה - אלא רק
-מהרגיסטר. המילים שיוצאות מכך הן אוצר המילים של המו"ל, והן אלו שיש
-לנטרל לפני חילוץ הנושאים.
+A blurb is publisher marketing, a CMU summary is a reader's plot description.
+Comparing the two descriptions of one book, any vocabulary difference cannot
+come from the plot - only from register. Those words are what has to be
+neutralised before topics are extracted.
 
-ההצמדה נעשית לפי כותרת מנורמלת, עם פסילת כותרות דו-משמעיות בשני הצדדים
-ואימות שנה כשהיא ידועה. אין כאן שום שימוש במגמות של CMU לאורך זמן -
-הביקורת היחידה שנדרשת היא "אותו ספר, שני מתארים".
+Books are paired on a normalised title, dropping ambiguous titles on both sides
+and checking the year where known.
 """
 
 import gzip
@@ -26,10 +24,10 @@ import pandas as pd
 import text as T
 
 MATCH_CACHE = "keyness_matched.pkl"
-# פער השנים המרבי המותר בין שתי הרשומות כשהשנה ידועה בשני הצדדים.
-# CMU נותן לעיתים את שנת המהדורה ולא את שנת החיבור, ולכן אפס יהיה נוקשה מדי
+# Largest year gap allowed when both sides carry a year. CMU sometimes gives
+# the edition year rather than the year of composition, so zero is too strict
 YEAR_TOLERANCE = 2
-# כותרות קצרות מדי ("Home", "1984") מתאימות ליותר מדי ספרים שונים
+# very short titles ("Home", "1984") match too many different books
 MIN_TITLE_CHARS = 6
 
 _PUNCT_RE = re.compile(r"[^a-z0-9 ]+")
@@ -37,7 +35,6 @@ _WS_RE = re.compile(r"\s+")
 
 
 def norm_title(value):
-    """מנרמל כותרת להשוואה: ללא ניקוד, ללא פיסוק, רווחים מכווצים, אותיות קטנות."""
     s = unicodedata.normalize("NFKD", str(value))
     s = "".join(c for c in s if not unicodedata.combining(c)).lower()
     s = _PUNCT_RE.sub(" ", s)
@@ -46,9 +43,8 @@ def norm_title(value):
 
 def cmu_title_index(path=T.CMU_PATH):
     """
-    מחזיר DataFrame של CMU עם כותרת מנורמלת, לאחר פסילת כותרות שאינן חד-משמעיות.
-    כותרת שמופיעה ביותר משורה אחת ב-CMU נפסלת: אין דרך לדעת לאיזה ספר
-    הרשומה ב-Goodreads מתאימה.
+    CMU records with a normalised title, dropping non-unique titles: there is no
+    way to tell which book a Goodreads record refers to.
     """
     cols = ["wiki_id", "freebase_id", "title", "author", "pub_date", "genres", "summary"]
     df = pd.read_csv(path, sep="\t", header=None, names=cols, quoting=3)
@@ -69,12 +65,9 @@ def cmu_title_index(path=T.CMU_PATH):
 
 def stream_goodreads_by_title(title_keys, path=T.GOODREADS_PATH, works_path=T.WORKS_PATH):
     """
-    מעבר יחיד על goodreads_books.json.gz שאוסף **כל** יצירה שכותרתה נמצאת
-    ב-title_keys. אין כאן מכסה לעשור ואין דגימה: המחקר הזה עוסק ברגיסטר
-    ולא במגמות, ולכן כל התאמה שנמצאת שווה משהו.
-
-    כותרת נשמרת עם כל היצירות שנמצאו לה, כדי שאפשר יהיה לפסול בהמשך
-    כותרת שהתאימה ליותר מיצירה אחת ב-Goodreads.
+    One pass collecting every work whose title is in title_keys. No sampling -
+    this is about register, not trends. Titles keep all their matches so ambiguous
+    ones can be dropped later.
     """
     work_years = T.load_work_years(works_path)
     print(f"  loaded {len(work_years)} work years")
@@ -115,14 +108,11 @@ def stream_goodreads_by_title(title_keys, path=T.GOODREADS_PATH, works_path=T.WO
 
 def build_matched_pairs(cache_path=MATCH_CACHE, force_reload=False):
     """
-    בונה את קבוצת הזוגות: לכל כותרת, תקציר Goodreads אחד ותקציר CMU אחד.
+    One Goodreads blurb and one CMU summary per title.
 
-    פסילות (לפי הסדר):
-    1. כותרת דו-משמעית ב-CMU  - נפסלה כבר ב-cmu_title_index.
-    2. כותרת שהתאימה ליותר מיצירת Goodreads אחת - אם השנה מכריעה בין
-       המועמדים, נבחר המועמד היחיד שבטווח YEAR_TOLERANCE; אחרת נפסלת.
-    3. שתי השנים ידועות ורחוקות זו מזו יותר מ-YEAR_TOLERANCE - כנראה
-       שני ספרים שונים בעלי אותה כותרת.
+    Dropped: titles ambiguous in CMU, titles matching several Goodreads works
+    unless the year settles it, and pairs whose known years differ by more than
+    YEAR_TOLERANCE.
     """
     if not force_reload and os.path.exists(cache_path):
         print(f"Loading cached matched pairs from {cache_path}")
@@ -151,8 +141,8 @@ def build_matched_pairs(cache_path=MATCH_CACHE, force_reload=False):
                 and abs(gr["Year"] - ref.Year) > YEAR_TOLERANCE:
             dropped_year += 1
             continue
-        # השנה המועדפת היא זו של Goodreads (שנת הפרסום המקורית של היצירה);
-        # CMU משמש כגיבוי כשהיא חסרה
+        # prefer the Goodreads year (the work's original publication year);
+        # CMU is the fallback when it is missing
         year = gr["Year"] if gr["Year"] is not None else ref.Year
         rows.append({
             "TitleKey": key,
@@ -180,26 +170,27 @@ def build_matched_pairs(cache_path=MATCH_CACHE, force_reload=False):
 LEMMA_CACHE = "keyness_lemmas.pkl"
 KEYNESS_CSV = "keyness_goodreads_vs_cmu.csv"
 
-# ספי הסינון לרשימת ההסרה המוצעת.
-# G2 הוא מבחן יחס-נראות עם דרגת חופש אחת; 15.13 הוא p<0.0001
+# Thresholds for the suggested removal list.
+# G2 is a log-likelihood ratio test with one degree of freedom; 15.13 is p<0.0001
 G2_MIN = 15.13
-# יחס-לוג 0.585 פירושו "שכיח פי 1.5 לפחות בגודריידס מאשר ב-CMU, לאחר נרמול
-# אורך". הסף מכוון בכוונה נמוך: המסננת שמגינה על מילות תוכן היא phi
-# שלהלן, ולא ה-keyness. סף keyness נוקשה יותר לא הגן על אף מילת תוכן
-# נוספת - הוא רק העלים מילות שיווק אמיתיות (unforgettable, compelling)
+# A log ratio of 0.585 means "at least 1.5x as frequent in Goodreads as in CMU,
+# after length normalisation". It is deliberately loose: the filter that protects
+# content words is phi below, not keyness. A stricter keyness cut protected no
+# additional content word - it only lost genuine marketing words (unforgettable,
+# compelling)
 LOG_RATIO_MIN = 0.585
-# מילה שמופיעה בפחות מ-0.5% מהתקצירים (כ-43 ספרים) היא תכונה של אותם
-# ספרים ולא של הרגיסטר
+# a word in under 0.5% of blurbs (about 43 books) is a property of those books
+# rather than of the register
 MIN_DOC_SHARE = 0.005
-# עשור עם פחות זוגות מכך אינו נספר בבדיקת העקביות
+# a decade with fewer pairs than this does not count toward the consistency test
 CONSISTENCY_MIN_PAIRS = 30
-# "בעקביות" - שכיח יותר בגודריידס ב-85% מהעשורים הנספרים לפחות.
-# דרישה של 100% פוסלת מילים בגלל עשור בודד בעל 30 זוגות
+# "consistently" means more frequent in Goodreads in at least 85% of counted
+# decades. Requiring 100% rejects words over a single decade holding 30 pairs
 CONSISTENCY_MIN = 0.85
 
 
 def matched_lemmas(cache_path=LEMMA_CACHE, force_reload=False):
-    """מלמטז את שני הצדדים באותו צינור בדיוק ששימש למודל הנושאים."""
+    """Lemmatise both sides through the pipeline used for the model."""
     if not force_reload and os.path.exists(cache_path):
         print(f"Loading cached lemmas from {cache_path}")
         return pd.read_pickle(cache_path)
@@ -213,7 +204,6 @@ def matched_lemmas(cache_path=LEMMA_CACHE, force_reload=False):
 
 
 def _counts(series):
-    """מחזיר (ספירת מופעים, ספירת מסמכים) עבור עמודת מחרוזות של למות."""
     tokens, docs = Counter(), Counter()
     for text in series:
         toks = text.split()
@@ -224,15 +214,12 @@ def _counts(series):
 
 def keyness_table(df):
     """
-    מחשב keyness של Goodreads מול CMU על אותם ספרים.
+    Keyness of Goodreads against CMU over the same books.
 
-    G2 (log-likelihood) נמדד על שכיחות המופעים ולא על שכיחות המסמכים, משום
-    שתקציר CMU ארוך פי 2.6 בחציון מתקציר Goodreads: מדד ברמת המסמך היה
-    מזכה את CMU רק בשל האורך, ואילו שכיחות יחסית מנוטרלת אורך מעצם הגדרתה.
-    ספירת המסמכים עדיין מדווחת, כדי לחשוף מילה שכל מופעיה באים מספר בודד.
-
-    log_ratio הוא log2 של יחס השכיחויות היחסיות, עם החלקת 0.5 לצד שבו
-    המילה נעדרת לגמרי.
+    G2 is computed on token frequency, not document frequency: a CMU summary is
+    2.6x longer at the median, so a document-level measure would credit CMU for
+    length alone. log_ratio is the log2 ratio of relative frequencies, smoothed by
+    0.5 on whichever side is absent.
     """
     gr_tok, gr_doc = _counts(df["GR_Lemmas"])
     cmu_tok, cmu_doc = _counts(df["CMU_Lemmas"])
@@ -241,7 +228,7 @@ def keyness_table(df):
     print(f"  {n_gr} Goodreads tokens vs {n_cmu} CMU tokens "
           f"({n_cmu / n_gr:.2f}x longer on the CMU side)")
 
-    # עקביות: לכל עשור בעל די זוגות, האם המילה שכיחה יותר בגודריידס
+    # consistency: per decade with enough pairs, is the word commoner in Goodreads
     decades = [d for d, n in df["Decade"].value_counts().items() if n >= CONSISTENCY_MIN_PAIRS]
     decades.sort()
     per_decade = {}
@@ -256,12 +243,12 @@ def keyness_table(df):
     rows = []
     for word in set(gr_tok) | set(cmu_tok):
         a, b = gr_tok[word], cmu_tok[word]
-        if a + b < 20:          # מילים נדירות מדי מכדי להעריך יחס
+        if a + b < 20:          # too rare to estimate a ratio
             continue
         e1 = n_gr * (a + b) / (n_gr + n_cmu)
         e2 = n_cmu * (a + b) / (n_gr + n_cmu)
         g2 = 2 * ((a * np.log(a / e1) if a else 0) + (b * np.log(b / e2) if b else 0))
-        # החלקה נדרשת רק כשאחד הצדדים אפס; אחרת היחס מחושב כפי שהוא
+        # smoothing is needed only when one side is zero
         ra = (a if a else 0.5) / n_gr
         rb = (b if b else 0.5) / n_cmu
         higher_in_gr = 0
@@ -283,16 +270,16 @@ def keyness_table(df):
         })
 
     out = pd.DataFrame(rows)
-    # הכיוון נשמר בסימן של log_ratio; g2 עצמו חסר-כיוון
+    # direction is carried by the sign of log_ratio; g2 itself is undirected
     out["direction"] = np.where(out["log_ratio"] > 0, "goodreads", "cmu")
     return out.sort_values("g2", ascending=False).reset_index(drop=True)
 
 
 def suggested_removals(table):
     """
-    רשימת ההסרה המוצעת: מילים שכיחות בעקביות בגודריידס ולא ב-CMU.
-    כל התנאים חייבים להתקיים יחד - מובהקות, גודל אפקט, פיזור על פני ספרים
-    ועקביות על פני העשורים.
+    Words consistently common in Goodreads and not in CMU. Every condition must
+    hold at once: significance, effect size, spread across books, consistency
+    across decades.
     """
     keep = (
         (table["direction"] == "goodreads")
@@ -340,10 +327,11 @@ def report(table, removals, top_n=200):
         print(f"  [{label}]  ({len(block)} words)")
         print(f"    {why}")
         for row in block.itertuples():
-            # phi אינו יציב כשמספר הספרים שבהם המילה מופיעה בשני הצדדים קטן.
-            # "penguin" למשל מקבל phi 0.18 על סמך 5 חפיפות בלבד מתוך 8,680
-            # הסימון רלוונטי רק כשמילה *ניצלה* מהסרה בזכות phi גבוה: phi נמוך
-            # על מעט חפיפות הוא בדיוק מה שמצופה ממילת רגיסטר, ואינו חשוד
+            # phi is unstable when a word appears on both sides in few books.
+            # "penguin" for instance scores phi 0.18 on only 5 overlaps out of
+            # 8,680. The flag matters only when a word was SAVED from removal by
+            # a high phi: a low phi on few overlaps is exactly what a register
+            # word looks like, and is not suspicious
             weak = ("  (!) phi on few co-occurrences"
                     if tier != "register" and row.both < MIN_BOTH_FOR_PHI else "")
             print(_fmt(row) + f"  phi {row.phi:5.2f}{weak}")
@@ -365,8 +353,8 @@ def report(table, removals, top_n=200):
 
 def calibrate_phi(df):
     """
-    מדפיס את phi על קבוצת הייחוס. זהו הבסיס לשני הספים: ללא הכיול הזה
-    כל סף היה ניחוש, ועם הכיול רואים שהחלוקה עצמה בימודלית.
+    phi over the reference set. Without this calibration any threshold would be a
+    guess; with it the split is visibly bimodal.
     """
     print("--- phi calibration on reference words ---")
     for kind, words in _PHI_CALIBRATION.items():
@@ -383,7 +371,7 @@ def main():
     removals = suggested_removals(table)
     assoc = paired_association(df, removals["word"].tolist())
     removals = removals.merge(assoc, on="word")
-    # דירוג לפי phi: קודם מה שאפשר להסיר בבטחה, אחר כך מה ששנוי במחלוקת
+    # ranked by phi: safest removals first, contested ones after
     removals = removals.sort_values("phi").reset_index(drop=True)
     removals["tier"] = np.select(
         [removals["phi"] < PHI_REGISTER_MAX, removals["phi"] < PHI_CONTENT_MIN],
@@ -398,20 +386,18 @@ def main():
 
 
 
-# שני הספים כוילו על קבוצת ייחוס, ולא נבחרו לפי תחושה. ראו calibrate_phi():
-# מילות מטא ביבליוגרפיות מובהקות מקבצות ב-phi שבין 0.00 ל-0.05
-# (isbn -0.003, reprint -0.003, anthology -0.001, paperback 0.010,
-#  bestseller 0.013, edition 0.021, introduction 0.050), ואילו מילות תוכן
-# מובהקות מתחילות ב-0.12 ועולות (money 0.12, story 0.14, life 0.16,
-# marriage 0.19, love 0.23, war 0.37, vampire 0.70). בין 0.05 ל-0.12 יש
-# פער ריק כמעט, ולכן הוא מדווח כתחום ביניים במקום להיחתך בנקודה שרירותית
+# Both thresholds were calibrated on a reference set, not chosen by feel. See
+# calibrate_phi(): metadata words cluster at phi 0.00-0.05 (isbn -0.003,
+# paperback 0.010, introduction 0.050) while content words start at 0.12 and
+# rise (story 0.14, love 0.23, war 0.37, vampire 0.70). The 0.05-0.12 range is
+# nearly empty, so it is a reported grey zone rather than an arbitrary cut
 PHI_REGISTER_MAX = 0.05
 PHI_CONTENT_MIN = 0.12
-# מתחת למספר הזה של ספרים שבהם המילה מופיעה בשני התיאורים, phi מבוסס על
-# מדגם קטן מדי מכדי לסמוך עליו, והמילה מסומנת בפלט
+# below this many books where the word appears in both descriptions, phi rests
+# on too small a sample to trust, and the word is flagged in the output
 MIN_BOTH_FOR_PHI = 20
 
-# קבוצת הייחוס לכיול: מילות תוכן חד-משמעיות מול מטא-דאטה ביבליוגרפי
+# calibration reference set: unambiguous content words against bibliographic metadata
 _PHI_CALIBRATION = {
     "content": ["vampire", "dragon", "island", "king", "war", "murder", "school",
                 "space", "detective", "ship", "family", "horse", "love",
@@ -424,15 +410,12 @@ _PHI_CALIBRATION = {
 
 def paired_association(df, words):
     """
-    המבחן שההצמדה לפי ספר נועדה לאפשר: האם המילה בתקציר המו"ל **מנבאת**
-    את העלילה?
+    Does a word in the blurb PREDICT the plot?
 
-    לכל מילה נבנית טבלת 2x2 על פני זוגות הספרים - האם הופיעה בצד גודריידס,
-    האם הופיעה בצד CMU - ומחושב מקדם phi. ההיגיון: מילת תוכן אמיתית
-    ("war", "murder") תופיע בשני התיאורים של אותו ספר, משום ששניהם מתארים
-    את אותה עלילה; מילת רגיסטר ("classic", "edition") תופיע רק בצד המו"ל,
-    ללא כל קשר לספר שמתחתיה. phi נמוך הוא הראיה שהמילה אינה נושאת תוכן,
-    ולכן אפשר להסירה בלי לאבד נושא.
+    A 2x2 table per word over the book pairs, scored by phi. A real content word
+    (war, murder) appears in both descriptions of the same book; a register word
+    (classic, edition) appears only on the publisher's side. Low phi is the
+    evidence that a word can be removed without losing a topic.
     """
     gr_sets = [set(t.split()) for t in df["GR_Lemmas"]]
     cmu_sets = [set(t.split()) for t in df["CMU_Lemmas"]]
@@ -461,9 +444,8 @@ WORD_WEIGHTS_CSV = "keyness_word_weights.csv"
 
 def _phi_all(df):
     """
-    phi לכל אוצר המילים, בחישוב מטריצי. הלולאה שב-paired_association היא
-    O(מילים x מסמכים) ואינה מעשית ל-28 אלף מילים; כאן n11 מתקבל ממכפלה
-    איבר-איבר של שתי מטריצות בינאריות
+    phi for the whole vocabulary as matrix algebra; the loop in
+    paired_association is impractical for 28k words.
     """
     from sklearn.feature_extraction.text import CountVectorizer
     n = len(df)
@@ -483,10 +465,8 @@ def _phi_all(df):
 
 def export_word_weights(path=WORD_WEIGHTS_CSV):
     """
-    משקל הרגיסטר של כל מילה, לשימוש מסננים אחרים.
-    חיובי = אוצר מילים של מו"ל, שלילי = אוצר מילים של עלילה, אפס = נייטרלי.
-    ה-log_ratio מדוכא ככל ש-phi גבוה יותר, כלומר ככל שהמילה כן מנבאת את
-    הספר שמתחתיה, כדי ש-war ו-adventure יישארו קרובים לאפס.
+    A register weight per word: positive is publisher vocabulary, negative is
+    plot. log_ratio is damped as phi rises, so war and adventure stay near zero.
     """
     df = matched_lemmas()
     phi = _phi_all(df)
@@ -501,8 +481,8 @@ def export_word_weights(path=WORD_WEIGHTS_CSV):
         if w != 0:
             rows.append({"word": r.word, "weight": w, "phi": phi.get(r.word, 0.0),
                          "log_ratio": r.log_ratio, "g2": r.g2})
-    # mergesort יציב: quicksort מחזיר סדר אחר בכל ריצה עבור מילים בעלות
-    # אותו משקל בדיוק, והקובץ יוצא שונה בבתים אף שתוכנו זהה
+    # mergesort is stable: quicksort orders exactly-tied weights differently on
+    # each run, so the file differs byte for byte although its content is identical
     out = pd.DataFrame(rows).sort_values("weight", ascending=False,
                                          kind="mergesort")
     out.to_csv(path, index=False)

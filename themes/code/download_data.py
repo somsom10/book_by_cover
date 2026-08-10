@@ -1,14 +1,11 @@
 """
-הורדת שלושת הקבצים הגולמיים אל data/. זה הצעד היחיד שדורש אינטרנט.
+Fetches the three raw datasets into data/. The only step that needs a network.
 
-למה סקריפט ולא הוראה ב-README: קודם הנתיב ל-CMU הצביע על מטמון של
-kagglehub שקיים במחשב אחד בלבד, וכל מי שהיה מנסה להריץ במקום אחר היה
-מקבל FileNotFoundError בלי לדעת מה חסר. כאן המקור מפורש, הגודל נבדק,
-והורדה שנקטעה ממשיכה מהנקודה שבה נפסקה במקום להתחיל מאפס - הקובץ הגדול
-הוא 2GB ואי אפשר להתייחס להורדה שלו כאל פעולה אטומית.
+A script rather than a README line because the source must be explicit, sizes
+verified, and an interrupted transfer resumed - the largest file is 2GB.
 
-  python download_data.py            # הכל
-  python download_data.py --check    # רק בדיקה מה קיים ומה חסר, בלי הורדה
+  python download_data.py            # everything
+  python download_data.py --check    # report what is present, download nothing
 """
 import os
 import sys
@@ -17,9 +14,9 @@ import urllib.request
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 
-# הגדלים הם מה שהשרת מחזיר, והם נבדקים אחרי ההורדה. קובץ באורך אחר הוא
-# קובץ קטוע, וזו תקלה שקל מאוד לפספס: הוא ייפתח, ייקרא חלקית, ויחזיר
-# קורפוס קטן יותר בלי שום הודעת שגיאה
+# Sizes are what the server reports, and are checked after each download. A
+# file of any other length is truncated - a failure that is easy to miss, since
+# a truncated gzip opens, reads partially, and yields a smaller corpus silently
 FILES = [
     ("goodreads_books.json.gz",
      "https://mcauleylab.ucsd.edu/public_datasets/gdrive/goodreads/"
@@ -42,7 +39,7 @@ def _human(n):
 
 
 def fetch(url, dest, expect=None):
-    """הורדה עם המשך: אם קיים קובץ חלקי, מבקשים ממנו והלאה ב-Range."""
+    """Download with resume: a partial file is continued via a Range request."""
     have = os.path.getsize(dest) if os.path.exists(dest) else 0
     if expect and have == expect:
         print(f"  {os.path.basename(dest)}: already complete ({_human(have)})")
@@ -59,7 +56,7 @@ def fetch(url, dest, expect=None):
         print(f"  resuming at {_human(have)}")
 
     with urllib.request.urlopen(req, timeout=60) as r:
-        # שרת שמתעלם מ-Range מחזיר 200 ואת כל הקובץ; אז מתחילים מחדש
+        # a server that ignores Range answers 200 with the whole file: restart
         if have and r.status == 200:
             mode, have = "wb", 0
         total = int(r.headers.get("Content-Length", 0)) + have

@@ -1,62 +1,59 @@
 """
-תיחום הטקסט: איתור ההתחלה והסוף של תיאור העלילה בתוך תקציר Goodreads.
+Bounding: finding where the plot description starts and ends in a blurb.
 
-ההנחה המבנית שעליה הכל נשען: הזבל מצטבר בקצוות. תקציר מזוהם טיפוסי בנוי
-[פתיח פרסי/רבי-מכר] [העלילה] [על המחבר / שבחים / מדריך לקבוצת קריאה],
-ולכן מציאת גבול התחלה וגבול סוף מחזירה את רוב העלילה בלי לסווג כל משפט.
+The structural fact this exploits: the junk collects at the edges. A typical
+contaminated blurb is [award/bestseller preface] [plot] [about the author /
+praise], so finding a start and an end boundary recovers most of the plot
+without classifying every sentence.
 
-שלוש משפחות של כללים, כל אחת עם שם לכל כלל, כדי שכל הסרה תהיה ניתנת
-לביקורת בדיעבד. זו הדרישה המרכזית: לא מספיק שהמסנן יעבוד, צריך יומן שאפשר
-לעבור עליו ולראות מה נמחק ולמה.
-
-מגבלה ידועה מראש: תיחום אינו יכול להגיע לפרסומת שיושבת *בתוך* משפט עלילה.
-"In this unforgettable novel, a soldier returns from Vietnam" הוא משפט אחד,
-רובו עלילה, והוא שורד בשלמותו.
+Every rule is named, so each removal can be audited afterwards. Known limit:
+bounding cannot reach marketing inside a plot sentence.
 """
 
 import re
 from collections import namedtuple
 
-# --- פרמטרים ---
+# --- parameters ---
 
-# מתחת לכמות הזו של תווים אחרי התיחום, מוותרים ומחזירים את המקור.
-# מסמך ריק גרוע יותר ממסמך עם רעש
+# Below this many characters after bounding, give up and return the original.
+# An emptied document is worse than a noisy one
 MIN_KEPT_CHARS = 200
-# אותו רעיון כשיעור: תיחום שמוחק יותר מ-60% מהתקציר כנראה טעה
+# same idea as a ratio: a trim removing over 60% of the blurb probably erred
 MIN_KEPT_RATIO = 0.40
-# פסקה שרוב אותיותיה גדולות היא כותרת או שורת צעקה, ולא עלילה
+# a paragraph that is mostly uppercase is a heading or a shout line, not plot
 _CAPS_RATIO = 0.80
 _CAPS_MIN_CHARS = 20
-# כותרת קצרה המסתיימת בנקודתיים ("About the Author:")
+# a short heading ending in a colon ("About the Author:")
 _HEADING_MAX_CHARS = 60
 
 
-# --- שיטה 1: ביטויים רגולריים לפתיחים ולסיומות פרסומיות ---
+# --- method 1: regexes for promotional prefaces and postscripts ---
 #
-# הכיוון חשוב ולכן הרשימות נפרדות: כלל "פתיח" אומר "חתוך את הכל עד כאן",
-# וכלל "סיומת" אומר "חתוך את הכל מכאן והלאה". ביטוי שמופיע רק כשהוא בקצה
-# מעוגן ל-^ - "Praise for" באמצע משפט יכול להיות תוכן אמיתי.
+# Direction matters, so the lists are separate: a preface rule means "cut
+# everything up to here", a postscript rule means "cut everything from here".
+# A phrase that is only boilerplate at the edge is anchored to ^ - "Praise for"
+# mid-sentence can be real content.
 
 _PREFACE_RULES = [
-    # "From the #1 New York Times bestselling author of..." - הצגת המחבר,
-    # שקודמת לעלילה ואינה חלק ממנה
+    # "From the #1 New York Times bestselling author of..." - introducing the
+    # author, which precedes the plot and is not part of it
     ("bestselling_author",
      r"\b(#\s*1\s+)?(new york times|usa today|sunday times|wall street journal|"
      r"internationally|nationally|globally)?\s*best[\s-]?selling author\b"),
-    # פרסים מוכרזים לפני התקציר, כמעט תמיד כמשפט נפרד
+    # awards announced before the blurb, almost always as their own sentence
     ("award_winner",
      r"^\s*\W*(winner of|shortlisted for|longlisted for|finalist for|"
      r"nominated for|winner:)\b"),
-    # "From the author of Gone Girl" - הפניה לספר אחר
+    # "From the author of Gone Girl" - a pointer to another book
     ("from_the_author_of",
      r"^\s*\W*from the (#\s*1\s+)?(new york times\s+)?(best[\s-]?selling\s+)?"
      r"(author|creator|writer) of\b"),
-    # עיבוד קולנועי הוא עובדה על הספר, לא על העלילה
+    # a screen adaptation is a fact about the book, not about the plot
     ("now_a_film",
      r"\bnow a (major )?(motion picture|film|netflix (series|original|film)|"
      r"hbo (series|film)|major (television|tv) (series|event))\b"
      r"|\bsoon to be a (major )?(motion picture|film|series)\b"),
-    # תגי "ספר השנה" למיניהם
+    # "book of the year" style tags
     ("notable_book",
      r"^\s*\W*(an? )?(new york times )?(notable book|book of the year|"
      r"best book of|editors'? choice|oprah'?s book club)\b"),
@@ -66,23 +63,24 @@ _PREFACE_RULES = [
      r"best[\s-]?seller\b"),
 ]
 
-# סיומות מסוג *כותרת*: הן אינן משפט זבל בודד אלא נקודת חיתוך. כל מה שאחרי
-# "About the Author" הוא ביוגרפיה, וכל מה שאחרי "Praise for" הוא ציטוטי
-# ביקורת - גם אם אף אחד מהמשפטים האלה אינו מפעיל בעצמו שום כלל. זה היה
-# הכשל המרכזי בגרסה הראשונה: הסריקה לאחור נעצרה מייד, משום שהמשפט האחרון
-# בביוגרפיה נראה תמים, והכותרת נשארה באמצע הטקסט בלי שהוסרה
+# HEADING-type postscripts: not a single junk sentence but a cut point.
+# Everything after "About the Author" is biography, and everything after
+# "Praise for" is review quotes - even when none of those sentences fires a rule
+# on its own. This was the main failure of the first version: the backward scan
+# stopped immediately because the last sentence of a biography looks innocent,
+# and the heading stayed in the middle of the text unremoved
 _HARD_POSTSCRIPT_RULES = [
-    # הביוגרפיה של המחבר - הסיומת הנפוצה ביותר
+    # the author biography - the commonest postscript
     ("about_the_author",
      r"^\s*\W*about the (author|translator|illustrator|editor|book)\b"),
-    # תוספות מסחריות בסוף הכרך
+    # commercial extras at the back of the volume
     ("includes_extra",
      r"\bincludes? (a |an )?(excerpt|preview|bonus|sneak peek|"
      r"reading group guide|discussion guide|readers guide)\b"),
     ("reading_guide",
      r"\b(reading (group|club) guide|discussion questions|"
      r"questions for discussion|a readers guide)\b"),
-    # פנייה ישירה לקורא לקנות עוד - לעולם לא עלילה
+    # direct appeals to the reader to buy more - never plot
     ("dont_miss",
      r"^\s*\W*(don'?t miss|look for|also by|also available|perfect for fans of|"
      r"if you (loved|liked|enjoyed))\b"),
@@ -90,7 +88,7 @@ _HARD_POSTSCRIPT_RULES = [
 ]
 
 _POSTSCRIPT_RULES = [
-    # מנגנון המהדורה
+    # edition apparatus
     ("with_introduction",
      r"\bwith an? (new |brand[\s-]new )?(introduction|foreword|afterword|"
      r"preface|essay) by\b"),
@@ -99,9 +97,9 @@ _POSTSCRIPT_RULES = [
     ("edition_stmt",
      r"^\s*\W*(this|the) (revised |deluxe |anniversary |special |new |"
      r"expanded |updated )*(edition|printing|reissue|impression)\b"),
-    # רק כמשפט קצר ועצמאי. "First published in 1952, this classic recounts
-    # the story of Basil, a young silversmith..." הוא משפט עלילה שנפתח
-    # בהערה ביבליוגרפית, והסרתו מוחקת את העלילה איתה
+    # only as a short standalone sentence. "First published in 1952, this
+    # classic recounts the story of Basil, a young silversmith..." is a plot
+    # sentence opening with a bibliographic note; cutting it cuts the plot too
     ("first_published", r"^.{0,110}\b(first|originally) published (in|by)\b.{0,60}$"),
     ("cover_art",
      r"\bcover (art|design|illustration|photograph) by\b|\bjacket (design|art) by\b"),
@@ -109,15 +107,15 @@ _POSTSCRIPT_RULES = [
 ]
 
 
-# --- שיטה 2א: תבניות חוזרות קבועות - כותרות תחתונות של מו"לים ---
+# --- method 2a: fixed recurring patterns - publisher footers ---
 #
-# טקסט משפטי ויצירת קשר. אלו יורים בכל מיקום, לא רק בקצה, משום שהם
-# לעולם אינם עלילה - גם אם נתקעו באמצע.
+# Legal and contact text. These fire anywhere, not only at the edge, because
+# they are never plot - even when stuck in the middle.
 
-# נמצאו בסריקת המשפטים בעלי ציון הרגיסטר הגבוה ביותר שאף כלל לא תפס.
-# כל אחת מהן היא משפחה שחוזרת בקורפוס, לא מקרה בודד.
+# Found by scanning the highest register-scoring sentences that no rule caught.
+# Each one is a family recurring in the corpus, not a one-off.
 _JUNK_RULES = [
-    # א. תגי פרסים ועיטורים, לרוב כמשפט ללא פועל כלל:
+    # a. award and honour tags, usually a sentence with no verb at all:
     # "An ALA Best Book for Young Adults", "New York Times and Publishers
     # Weekly Bestseller"
     ("award_badge",
@@ -126,7 +124,7 @@ _JUNK_RULES = [
      r"[^.!?]{0,40}\b(award|prize|winner|honou?r|best books?|notable)\b"
      r"|^\W*an? [A-Z][^.!?]{0,50}\bbest books? for young adults\b"
      r"|^[^.!?]{0,60}\bbest[\s-]?seller\b\s*[.!]?\s*$"),
-    # ב. הצהרות מהדורה והדפסה מחדש - עשירות הרבה יותר ממה שהיה ברשימה:
+    # b. edition and reprint statements, far more varied than first listed:
     # "Unabridged republication of the classic 1931 edition.",
     # "Unabridged, slightly corrected reprint of the 2nd, 1957 edition."
     ("reprint_stmt",
@@ -138,17 +136,17 @@ _JUNK_RULES = [
      r"|\bavailable in (paperback|hardcover|ebook)[^.!?]{0,30}for the first time\b"
      r"|\bmass market edition\b|\bdigitally (enlarged|reproduced|remastered)\b"
      r"|\bupdated (typeface|layout)\b"),
-    # ג. ציטוט ביקורת שמיוחס בסוגריים או בשם עיתון בלבד, בלי מקף:
+    # c. a review quote attributed in brackets or by paper name, with no dash:
     # "'superb!' (Australian SF News)", "'Entirely original' Spectator"
     ("quote_attribution",
      r"[\"'“”‘’][^\"'“”‘’]{3,}[\"'“”‘’]\s*\([^)]{3,40}\)\s*$"
      r"|[\"'“”‘’][^\"'“”‘’]{6,}[\"'“”‘’]\s+[A-Z][\w' ]{2,30}\s*$"
      r"|^\W*from \d+ stars? reviews?\b"),
-    # ד. מסחר טהור
+    # d. pure commerce
     ("commerce",
      r"\bfree to download\b|\bplus excerpts? from\b|\bbonus (material|content)\b"
      r"|\border (your copy|now)\b|\bon sale now\b|\bbuy (it |the )?now\b"),
-    # ו. תג פרס כשבר משפט, בלי פועל ובלי שם פרס מוכר:
+    # f. an award tag as a sentence fragment, no verb and no known award name:
     # "Winner, Best Books 2010", "Fehrenbach Award, Best Ethnic, Minority,
     # And Women's History Publication, 1987"
     ("award_fragment",
@@ -156,7 +154,8 @@ _JUNK_RULES = [
      r"|^[^.!?]{0,60}\baward\b\s*[,:][^.!?]{0,80}\d{4}\s*[.!]?\s*$"
      r"|^\W*(one of |an? )?[A-Z][\w' ]{2,30}('s)?\s*best\b[^.!?]{0,50}"
      r"\b(books?|novels?|of \d{4})\b"),
-    # ז. חזרה לדפוס. ההבדל מ-reprint_stmt: כאן המו"ל הוא הנושא הדקדוקי,
+    # g. back in print. Differs from reprint_stmt in that the publisher is the
+    # grammatical subject here,
     # "The OSU Press is proud to reissue this...", "is back in print with
     # a new afterword", "This Swallow Press reissue of Ladders to Fire"
     ("back_in_print",
@@ -165,13 +164,14 @@ _JUNK_RULES = [
      r"|\b[A-Z][\w]* (Press|Books|Publishing|House) reissue of\b"
      r"|\bnow in (paperback|hardcover|hardback)\b"
      r"|\bhas been reissued\b"),
-    # ח. טקסט של המרה לספר אלקטרוני
+    # h. ebook conversion text
     ("ebook_format",
      r"\bcarefully crafted ebook\b|\bformatted for your (ereader|kindle|nook)\b"
      r"|\bfunctional table of contents\b|\bactive table of contents\b"
      r"|\bconverted from its physical edition\b"),
-    # ט. מיצוב הקריירה של המחבר. שני תנאים בביטוי עצמו - ניסוח של מעמד
-    # *וגם* הקשר של כתיבה - כדי ש-"Anna is known for her temper" לא ייפול
+    # i. positioning the author's career. Two conditions inside the pattern -
+    # a status phrasing AND a writing context - so that "Anna is known for her
+    # temper" does not match
     ("author_positioning",
      r"\bis (widely |generally |universally )?"
      r"(known|regarded|recognized|considered|celebrated|acclaimed|hailed)"
@@ -181,13 +181,13 @@ _JUNK_RULES = [
      r"|\bhas established (himself|herself|themselves) as\b"
      r"|\bone of the (foremost|greatest|finest|leading|most \w+) "
      r"(writers?|authors?|novelists?|poets?|storytellers?|authorities)\b"),
-    # י. היסטוריית הפרסום של הכרך
+    # j. the publication history of the volume
     ("publication_history",
      r"\bbecame an? (immediate |instant |international )?best[\s-]?seller\b"
      r"|\bwas adapted into (a )?(film|movie|television|tv)\b"
      r"|\bwas selected by\b[^.!?]{0,60}\bfor\b[^.!?]{0,40}\b(annual|year'?s best)\b"
      r"|\bwent on to (sell|become)\b"),
-    # ה. רשימת חומרי הפתיחה של הכרך, שהיא תוכן העניינים ולא תיאור:
+    # e. the volume's front matter listing, a table of contents not a description:
     # "Foreword to the Basic Books Paperback Edition, 1974 (Gardner);
     #  Preface (Carnap); Foreword to the Dover Edition (Gardner)."
     ("front_matter_list",
@@ -201,7 +201,7 @@ _FOOTER_RULES = [
     ("printed_in", r"\bprinted (and bound )?in (the )?[A-Z]"),
     ("isbn", r"\bisbn\b"),
     ("library_of_congress", r"\blibrary of congress\b"),
-    # כתב הוויתור המשפטי שמופיע בעמוד זכויות היוצרים
+    # the legal disclaimer from the copyright page
     ("fiction_disclaimer",
      r"\bis a work of fiction\b|\bany resemblance to (actual|real) (persons|events)\b"),
     ("url", r"www\.\S+|https?://\S+"),
@@ -210,24 +210,21 @@ _FOOTER_RULES = [
 ]
 
 
-# --- שיטה 3: היסקים מבניים ולשוניים ---
+# --- method 3: structural and linguistic heuristics ---
 #
-# מילות קישור, פיסוק ואותיות גדולות שמסמנים מעבר מהעלילה למטא-דאטה.
+# Connectives, punctuation and capitalisation marking a shift from plot to metadata.
 
-# פעלים בקול של מוצר: המו"ל מתאר את החפץ ולא את הסיפור.
-# מסוכן יותר משאר הכללים - "Includes twelve stories about grief" הוא תוכן -
-# ולכן משקלו נמוך והוא אינו יורה לבדו במצב הרגיל
+# Product voice: the publisher describing the object rather than the story.
+# More dangerous than the other rules - "Includes twelve stories about grief" is
+# content - so it is weighted low and never fires alone in non-strict mode
 _PRODUCT_VOICE_RE = re.compile(
     r"^\s*\W*(includes?|featuring|features?|contains?|presents?|offers?|"
     r"provides?|collects?|compiles?|gathers?)\b", re.I)
 
-# ציטוט ואחריו מקף וייחוס - חתימת ציטוט הביקורת.
-# הגרסה הראשונה הייתה רחבה מדי: הדפוס "מרכאות ... מקף ... אות גדולה" תפס
-# ציטוטים מתוך *הספר עצמו* שהודבקו כתקציר, משום שמקף באמצע משפט נחשב
-# ייחוס. כאן נדרש שהייחוס יהיה קצר ויסיים את המשפט, כפי שייחוס אמיתי נראה
-# שני ביטויים ולא אחד, משום ש-re.I על ביטוי משותף מבטל את הדרישה לאות
-# גדולה: כך '"Genesis" -- before it is too late' נחשב ייחוס של מבקר.
-# צורת הייחוס תלוית-רישיות ולכן היא נבדקת בלי re.I
+# A quote, a dash and an attribution - the review-quote signature. The
+# attribution must be short and must end the sentence, or quotations from the
+# book itself get caught. Two patterns rather than one, because re.I on a shared
+# pattern would cancel the capital-letter requirement
 _REVIEW_ATTR_CASED_RE = re.compile(
     r"[\"“”]\s*[-–—]{1,2}\s*[A-Z][\w.'’&\- ]{2,40}\s*$")
 _REVIEW_SOURCE_RE = re.compile(
@@ -237,18 +234,18 @@ _REVIEW_SOURCE_RE = re.compile(
     r"boston globe|san francisco chronicle|npr|the atlantic|"
     r"\w+ review of books)\b", re.I)
 
-# פנייה בגוף שני או ציווי. "Meet Anna" נשאר בחוץ בכוונה - זו פתיחה
-# לגיטימית של עלילה
+# Second person or imperative address. "Meet Anna" is deliberately excluded:
+# that is a legitimate opening for a plot
 _READER_ADDRESS_RE = re.compile(
     r"^\s*\W*(don'?t miss|get ready (for|to)|if you (loved|liked|enjoyed)|"
     r"perfect for (fans|readers|anyone)|a must[\s-]read for|"
     r"you'?ll (love|never)|prepare to be)\b", re.I)
 
-# הצהרת מהדורה. שימו לב למה שאינו כאן: book, novel, story, collection.
-# הגרסה המתבקשת של הכלל - "סמן כל משפט שנושאו הוא הספר" - הורסת תוכן,
-# משום ש-"This novel explores the life of a Nigerian immigrant in 1970s
-# London" הוא משפט העלילה המרכזי בחלק גדול מהתקצירים. הנושא אינו האות;
-# המושא הוא. ולכן נדרשים שלושה תנאים יחד ולא אחד מהם
+# Edition statement. Note what is NOT here: book, novel, story, collection. The
+# obvious rule - "flag any sentence whose subject is the book" - destroys
+# content, since "This novel explores the life of a Nigerian immigrant in 1970s
+# London" is the main plot sentence of many blurbs. The object is the signal,
+# not the subject, so all three conditions are required together
 _EDITION_SUBJECT_RE = re.compile(
     r"\bthis (\w+\s+)?(edition|volume|printing|reissue|impression|reprint)\b", re.I)
 _EDITION_VERB_RE = re.compile(
@@ -262,44 +259,42 @@ _EDITION_OBJECT_RE = re.compile(
 _HEADING_RE = re.compile(r"^\s*[A-Z][^.!?]{0,%d}:\s*$" % _HEADING_MAX_CHARS)
 
 
-# --- שיטה 3ב: צפיפות רגיסטר, לכללים שאי אפשר לנסח כביטוי רגולרי ---
+# --- method 3b: register density, for what cannot be written as a regex ---
 #
-# המשפחה הגדולה ביותר שנמצאה בקריאת הטקסט אינה בעלת תבנית מילולית קבועה:
-# "It's an audacious, at times hilarious story that is ultimately
-# heartbreaking and unforgettable." או "Here is a rich and moving story, a
-# superbly readable one, a remarkable evocation of the native South."
-# אין כאן שום ביטוי שאפשר לתפוס - יש שם עצם של ספר, ערימת תארי שבח, ואפס
-# עלילה. לכן הכלל הזה מסתמך על משקלי הרגיסטר מ-keyness_word_weights.csv.
+# The largest family found by reading the text has no fixed verbal pattern:
+# "It's an audacious, at times hilarious story that is ultimately heartbreaking
+# and unforgettable." A book noun, a pile of praise adjectives and no plot, with
+# no phrase to catch - so this rule uses the register weights instead.
 
 WEIGHTS_PATH = "keyness_word_weights.csv"
-# הסף כויל על 60 המשפטים בעלי הציון הגבוה שאף כלל לא תפס
+# threshold calibrated on the 60 highest-scoring sentences no rule caught
 REGISTER_DENSE_MIN = 2.2
 REGISTER_DENSE_MIN_WORDS = 4
-# ציון גבוה במיוחד, שמאפשר להסתפק בשלוש מילים מדורגות
+# a very high score, which allows three scored words to be enough
 REGISTER_DENSE_STRONG = 3.0
-# מילה בעלת משקל שלילי חזק היא ראיה לעלילה, ומבטלת את הכלל
+# a strongly negative word is evidence of plot, and vetoes the rule
 PLOT_EVIDENCE_MAX = -0.40
 
-# הדבר שמשבחים. בלי שם עצם של ספר, משפט עתיר תארים הוא כנראה תיאור של
-# העלילה עצמה - "Their monumental achievement ... led to each being awarded
-# the Distinguished Flying Cross" מדבר על אנשים, לא על הכרך
+# The thing being praised. Without a book noun, an adjective-heavy sentence is
+# probably describing the plot itself - "Their monumental achievement ... led to
+# each being awarded the Distinguished Flying Cross" is about people, not the
+# volume
 _BOOK_NOUN_RE = re.compile(
     r"\b(story|stories|novel|book|work|masterpiece|masterwork|portrait|"
     r"account|saga|study|collection|memoir|biography|read|volume|epic|"
     r"debut|prose|narrative|edition|anthology|classic)\b", re.I)
 
-# שמות ז'אנר מגנים על המשפט גם כשציון הרגיסטר גבוה. "A tense and
-# nerve-shattering classic from the highly acclaimed master of action and
-# suspense" הוא אכן טקסט עטיפה, אך הז'אנר עצמו הוא מידע נושאי: "מתח עולה
-# בשנות התשעים" הוא ממצא. הערה: ה-keyness חולק - suspense מקבל שם 3.96 -
-# וההכרעה כאן היא של החוקרת ולא של המדידה
+# Genre names protect a sentence even at a high register score: the surrounding
+# copy is jacket text, but the genre itself is topical information, and
+# "suspense rises in the 1990s" is a finding. keyness disagrees (suspense scores
+# 3.96 there), so this call is a judgement rather than a measurement
 _GENRE_NOUN_RE = re.compile(
     r"\b(action|suspense|adventure|mystery|romance|horror|fantasy|thriller|"
     r"western|crime|noir|gothic|satire|comedy|tragedy|science fiction|"
     r"historical|detective|espionage|dystopian)\b", re.I)
 
-# פותח פסוקית סיפורית: "the story of *how* Wol and Weeps turn the town
-# upside down" הוא עלילה שנארזה במשפט משבח, ואסור להסירו
+# Opens a narrative clause: "the story of HOW Wol and Weeps turn the town
+# upside down" is plot wrapped in a praise sentence, and must not be removed
 _NARRATIVE_CLAUSE_RE = re.compile(
     r"\b(how|when|after|before|while|who|whose|where)\b\s+\w+", re.I)
 
@@ -309,9 +304,9 @@ _WEIGHTS = None
 
 def _resolve_weights(path):
     """
-    הטבלה נטענה קודם לפי תיקיית העבודה בלבד, ובהיעדרה הכלל register_dense
-    פשוט לא ירה - בלי הודעה, ועם קורפוס שונה בסופו של דבר. לכן מחפשים גם
-    ליד הקוד עצמו, וכשלא נמצא כלום מזהירים במקום לשתוק.
+    Look for the weight table beside the code as well as in the working
+    directory. Resolved against cwd alone, a missing file silently disabled
+    register_dense and produced a different corpus.
     """
     import os
     here = os.path.dirname(os.path.abspath(__file__))
@@ -323,7 +318,7 @@ def _resolve_weights(path):
 
 
 def load_weights(path=WEIGHTS_PATH):
-    """טוען את טבלת המשקלים פעם אחת. בהיעדרה הכלל אינו פועל, וזה נאמר בקול."""
+    """Load the weight table once. Without it the rule is inert, and says so."""
     global _WEIGHTS
     if _WEIGHTS is None:
         found = _resolve_weights(path)
@@ -342,7 +337,6 @@ def load_weights(path=WEIGHTS_PATH):
 
 
 def _lookup(word, W):
-    """התאמה גסה ללמה: הטבלה בנויה על למות, והטקסט כאן אינו מלומטז."""
     if word in W:
         return W[word]
     for suf, rep in (("ies", "y"), ("es", ""), ("s", ""), ("ing", ""),
@@ -355,7 +349,6 @@ def _lookup(word, W):
 
 
 def register_score(sentence):
-    """(ציון ממוצע, מספר מילים מדורגות, המשקל הנמוך ביותר שנמצא)."""
     W = load_weights()
     if not W:
         return 0.0, 0, 0.0
@@ -368,14 +361,14 @@ def register_score(sentence):
 
 def is_register_dense(sentence):
     """
-    ארבעה תנאים יחד. כל אחד מהם לבדו מוחק תוכן:
-    ציון גבוה, די מילים כדי שהממוצע יהיה יציב, שם עצם של ספר כמושא השבח,
-    ואין ראיה לעלילה - לא מילת עלילה חזקה ולא פסוקית סיפורית.
+    Four conditions together, since each alone destroys content: a high score,
+    enough words for the mean to be stable, a book noun as the object of the
+    praise, and no evidence of plot.
     """
     score, n, lo = register_score(sentence)
     if score < REGISTER_DENSE_MIN:
         return False
-    # שלוש מילים מדורגות מספיקות רק כשהציון גבוה מאוד, אחרת נדרשות ארבע
+    # three scored words suffice only at a very high score, otherwise four
     if n < 3 or (n == 3 and score < REGISTER_DENSE_STRONG):
         return False
     if lo <= PLOT_EVIDENCE_MAX:
@@ -387,13 +380,11 @@ def is_register_dense(sentence):
     return True
 
 
-# --- שמות עיתונים וכתבי עת, כביטויים ולא כמילים ---
+# --- newspaper and magazine names, as phrases rather than words ---
 #
-# "New York Times" הוא שם עיתון, אבל york ו-times כמילים בודדות הן תוכן
-# לגיטימי: "new york" ללא "times" מופיע ב-1,384 מסמכים כזירת התרחשות.
-# מדידה על הקורפוס: 36% מכל האזכורים של york ו-34% מאלה של times יושבים
-# בתוך "New York Times". לכן ההסרה היא של הצירוף בלבד, ולא של המילים -
-# הרשימה השחורה ברמת המילה הייתה מוחקת את ניו יורק עצמה.
+# "New York Times" is a newspaper, but york and times alone are content: "new
+# york" without "times" appears in 1,384 documents as a setting. Only the phrase
+# is removed, never the words - a word-level blacklist would delete New York.
 _PUBLICATION_PHRASES = [
     r"#?\s*1?\s*new york times", r"n\.?y\.?\s+times", r"los angeles times",
     r"sunday times", r"times literary supplement", r"wall street journal",
@@ -401,8 +392,8 @@ _PUBLICATION_PHRASES = [
     r"(school )?library journal", r"\bbooklist\b", r"usa today",
     r"entertainment weekly", r"\bbook review\b", r"oprah'?s book club",
     r"\bgoodreads\b", r"amazon\.com", r"barnes ?& ?noble",
-    # ניסוחי מהדורה שהחזיקו את אותו נושא: revised / updated.
-    # דפוס אחד ולא ארבעה, אחרת "newly revised and updated" נחתך לחצי
+    # edition phrasings on the same subject: revised / updated.
+    # One pattern rather than four, or "newly revised and updated" is half-cut
     r"(newly |fully |completely |thoroughly )?"
     r"(revis\w+|updated)( and (revis\w+|updated))?(?=\s+(edition|version|and))",
 ]
@@ -410,7 +401,7 @@ _PUBLICATION_RE = re.compile("|".join(_PUBLICATION_PHRASES), re.I)
 
 
 def strip_publication_names(text):
-    """מוחק שמות עיתונים כצירוף. מחזיר (טקסט, כמה הוסרו)."""
+    """Delete newspaper names as phrases. Returns (text, count)."""
     out, n = _PUBLICATION_RE.subn(" ", str(text))
     return re.sub(r"\s{2,}", " ", out).strip(), n
 
@@ -426,20 +417,20 @@ _FOOTER = _compile(_FOOTER_RULES)
 _JUNK = _compile(_JUNK_RULES)
 
 
-# --- פיצול למשפטים עם שמירת היסטים ---
+# --- sentence splitting, preserving offsets ---
 
-# מפצלים גם לפי שורה חדשה ולא רק לפי סימן סיום. הביקורת על הריצה השנייה
-# הראתה שזה מקור הטעויות הנותר: "ISBN: 9780099602019\nTHE SECOND WAR OF THE
-# RACES\nHorrified by the misuse of magic..." הוא משפט אחד בעיני מפצל
-# שמחפש נקודה, ולכן הסרת ה-ISBN גררה איתה את פתיחת העלילה
+# Split on newlines too, not only on terminal punctuation. Auditing the second
+# run showed this was the remaining source of errors: "ISBN: 9780099602019\nTHE
+# SECOND WAR OF THE RACES\nHorrified by the misuse of magic..." is one sentence
+# to a splitter looking for a full stop, so removing the ISBN dragged the
+# opening of the plot with it
 _SENT_END_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
 def split_sentences(text):
     """
-    מפצל למשפטים ומחזיר [(start, end, sentence)] עם היסטים לתוך המחרוזת
-    המקורית. ההיסטים נדרשים כדי שאפשר יהיה להחזיר גבולות ולתעד ביומן בדיוק
-    איזה קטע הוסר.
+    Sentences as (start, end, text), with offsets into the original string so
+    removals can be logged exactly.
     """
     out, pos = [], 0
     for piece in _SENT_END_RE.split(text):
@@ -461,10 +452,8 @@ def _is_all_caps(s):
 
 def flag_sentence(sentence, repeated=frozenset(), strict=False):
     """
-    מחזיר (רשימת שמות הכללים שירו, kind) עבור משפט אחד.
-
-    kind הוא "preface", "postscript" או "any" - הוא קובע מאיזה כיוון מותר
-    לחתוך. משפט שסומן על ידי כלל דו-כיווני ("any") נחשב זבל בכל מיקום.
+    Returns (rules that fired, kind), where kind is preface / postscript / any
+    and decides from which direction the sentence may be cut.
     """
     hits, kinds = [], set()
     norm = re.sub(r"\s+", " ", sentence.strip())
@@ -479,17 +468,17 @@ def flag_sentence(sentence, repeated=frozenset(), strict=False):
         if rx.search(sentence):
             hits.append(name); kinds.add("any")
 
-    # שיטה 2ב: משפט שחוזר מילה במילה בין ספרים שונים אינו מתאר אף אחד מהם.
-    # הקבוצה מגיעה מהקורפוס ולא מרשימה שנכתבה ביד, ולכן היא מוצאת גם
-    # מו"לים שאיש לא רשם
+    # Method 2b: a sentence repeated verbatim across different books describes
+    # none of them. The set comes from the corpus rather than a hand-written
+    # list, so it also finds publishers nobody listed
     if norm.lower() in repeated:
         hits.append("repeated_across_books"); kinds.add("any")
 
-    # all_caps אינו יורה לבדו. הביקורת על הריצה הראשונה הראתה שהוא אכל
-    # עלילה: "WHO KNOWS WHAT EVIL LURKS IN THE HEARTS OF MEN?" ו-"A
-    # LUFTWAFFE ACE WHO WOULDN'T DIE..." הן שורות פתיחה של מגזיני עיסה,
-    # כלומר תוכן בצעקות, ורק "OVER TWO AND ONE-HALF MILLION COPIES IN
-    # PRINT!" היה פרסומת. אותיות גדולות מסמנות רגיסטר, לא מטא-דאטה
+    # all_caps never fires alone. Auditing the first run showed it was eating
+    # plot: "WHO KNOWS WHAT EVIL LURKS IN THE HEARTS OF MEN?" and "A LUFTWAFFE
+    # ACE WHO WOULDN'T DIE..." are pulp magazine opening lines, i.e. content in
+    # shouting, and only "OVER TWO AND ONE-HALF MILLION COPIES IN PRINT!" was
+    # advertising. Capitals mark register, not metadata
     caps = _is_all_caps(norm)
     if _REVIEW_ATTR_CASED_RE.search(sentence) or _REVIEW_SOURCE_RE.search(sentence):
         hits.append("review_attribution"); kinds.add("any")
@@ -502,8 +491,8 @@ def flag_sentence(sentence, repeated=frozenset(), strict=False):
             and _EDITION_OBJECT_RE.search(sentence)):
         hits.append("edition_statement"); kinds.add("any")
 
-    # שני הכללים החלשים. הם מחזקים סימון קיים ואינם יוצרים אחד חדש, משום
-    # ששניהם מסמנים רגיסטר ("קול של מוצר", "צעקה") ולא מטא-דאטה
+    # The two weak rules. They reinforce an existing flag rather than creating
+    # one, because both mark register ("product voice", "shouting") not metadata
     if is_register_dense(sentence):
         hits.append("register_dense"); kinds.add("any")
 
@@ -524,7 +513,7 @@ def flag_sentence(sentence, repeated=frozenset(), strict=False):
     return hits, kinds.pop()
 
 
-# כללים שמבוססים על ראיה חד-משמעית ולא על היסק לשוני
+# rules resting on unambiguous evidence rather than linguistic inference
 _HARD_EVIDENCE = frozenset({
     "repeated_across_books", "isbn", "copyright", "url", "library_of_congress",
     "printed_in", "fiction_disclaimer", "social", "about_the_author",
@@ -538,14 +527,11 @@ BoundResult = namedtuple(
 
 def bound_summary(text, repeated=frozenset(), strict=False):
     """
-    מחזיר BoundResult עם גבולות התיאור, הטקסט המתוחם, ויומן ההסרות.
+    Trim the edges and return a BoundResult: boundaries, bounded text, and a log
+    of every removed span with the rules that fired.
 
-    removed הוא רשימה של dict-ים - קטע, מיקום, הכללים שירו וצד החיתוך.
-    זהו התוצר החשוב: בלעדיו אי אפשר לבדוק בדיעבד מה נמחק בטעות.
-
-    במצב הרגיל חותכים רק מהקצוות ולעולם לא מהאמצע, וזו בדיוק המשמעות של
-    "תיחום". strict=True מסיר גם משפטים מסומנים מהאמצע, משום שציטוטי
-    ביקורת אכן מופיעים באמצע התקציר.
+    Only the edges are trimmed and the interior is never touched, which is what
+    bounding means; strict=True also drops flagged interior sentences.
     """
     text = str(text)
     sents = split_sentences(text)
@@ -555,18 +541,19 @@ def bound_summary(text, repeated=frozenset(), strict=False):
     flags = [flag_sentence(s, repeated, strict) for _, _, s in sents]
     n = len(sents)
 
-    # גבול התחלה: מתקדמים כל עוד המשפט מסומן כפתיח או כזבל דו-כיווני
+    # start boundary: advance while the sentence is a preface or generic junk
     lo = 0
     while lo < n and flags[lo][1] in ("preface", "any"):
         lo += 1
-    # גבול סוף: נסוגים כל עוד המשפט מסומן כסיומת או כזבל דו-כיווני
+    # end boundary: retreat while the sentence is a postscript or generic junk
     hi = n
     while hi > lo and flags[hi - 1][1] in ("postscript", "any"):
         hi -= 1
 
-    # נקודת חיתוך קשה: הכותרת עצמה ומה שאחריה יורדים, גם אם המשפטים
-    # שאחריה תמימים למראה. מחפשים את המוקדמת ביותר שאינה המשפט הראשון -
-    # תקציר שכולו "About the Author" עדיף להשאיר לגלאי הבטיחות
+    # Hard cut point: the heading and everything after it go, even when the
+    # following sentences look innocent. Take the earliest one that is not the
+    # first sentence - a blurb that is entirely "About the Author" is better
+    # left to the safety rail
     for i in range(1, hi):
         if any(rx.search(sents[i][2]) for _, rx in _HARD_POSTSCRIPT):
             hi = i
@@ -601,13 +588,11 @@ def bound_summary(text, repeated=frozenset(), strict=False):
             start, end = sents[lo][0], sents[hi - 1][1]
             bounded = text[start:end].strip()
 
-    # מעקה בטיחות: תיחום שמוחק כמעט הכל כנראה טעה, ואז עדיף להחזיר את המקור.
-    #
-    # יוצא דופן אחד, שנלמד מהיומן: כשכל ההסרות באו מכללי ראיה קשה - משפט
-    # שחוזר מילה במילה בין ספרים, ISBN, זכויות יוצרים - אין מה להציל.
-    # 112 מסמכים נפלו למעקה, ורובם היו טקסט מו"ל במלואם ("This is a pre-1923
-    # historical reproduction that was curated for quality..."). החזרתם
-    # מכניסה את הזבל בחזרה; עדיף להחזיר ריק ולתת למסנן האורך למחוק אותם
+    # Safety rail: a trim removing almost everything probably erred, so the
+    # original is returned. One exception, learned from the log: when every
+    # removal came from a hard evidence rule there is nothing to save - the 112
+    # documents that hit the rail were mostly publisher text end to end, so
+    # returning empty and letting the length filter drop them is better
     hard = all(set(r["rules"].split(",")) <= _HARD_EVIDENCE for r in removed)
     fallback = (len(bounded) < MIN_KEPT_CHARS
                 or (len(text) and len(bounded) / len(text) < MIN_KEPT_RATIO))

@@ -1,14 +1,13 @@
 """
-מדווח כל מגמה בשתי הגרסאות: לפני הנרמול-מחדש ואחריו.
+Every trend reported twice, before and after renormalisation.
 
-הנרמול נכון עניינית - "מתוך מה שהתיאור באמת אומר על הספר" - אבל אינו
-נייטרלי: שיעור הרעש יורד לאורך הזמן (12.9% ב-1900 מול 6.3% ב-2010), ולכן
-המכפיל נסחף מ-1.148 ל-1.067 והעשורים המוקדמים מנופחים יותר. נושא שטוח
-לחלוטין ייראה כיורד בכ-7%.
+Renormalising is the right thing to measure but is not neutral: the marketing
+share falls over time, so the multiplier drifts from 1.148 to 1.067 and
+inflates early decades. A perfectly flat topic would appear to decline ~7%.
 
-**הפער בין שתי העמודות הוא ההטיה עצמה, גלויה לעין.** אותו סימן וסדר גודל
-דומה - הטענה בטוחה. סימן הפוך - אין טענה. שיאים אינם מושפעים, משום
-שהמכפיל משתנה בהדרגה ואינו יכול להזיז מקסימום מקומי.
+The gap between the two columns is the bias, in the open. Same sign and similar
+magnitude means the claim is safe. Peaks are unaffected - the multiplier
+changes gradually and cannot move a local maximum.
 """
 import numpy as np
 import pandas as pd
@@ -33,7 +32,7 @@ def main():
 
     raw = np.array([Wk[dec == d].mean(axis=0) for d in decades]) * 100
     ren = np.array([Wn[dec == d].mean(axis=0) for d in decades]) * 100
-    # ההשוואה מסתיימת ב-2000: 2010 הוא עשור חלקי (2010-2017, מוטה ל-2013)
+    # comparison stops at 2000: the 2010s are partial (2010-2017, centred on 2013)
     idx = [i for i, d in enumerate(decades) if d <= 2000]
     x = np.array([decades[i] for i in idx], dtype=float)
 

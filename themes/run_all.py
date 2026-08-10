@@ -1,19 +1,16 @@
 """
-הצינור כולו, מהורדת הנתונים ועד האיורים והבדיקות.
+The whole pipeline, from downloading the data to the figures and the checks.
 
-  python run_all.py                # הכל, מההתחלה
-  python run_all.py --list         # רשימת השלבים ומה כל אחד מייצר
-  python run_all.py --from model   # להמשיך משלב מסוים
+  python run_all.py                # everything, from scratch
+  python run_all.py --list         # the stages and what each one produces
+  python run_all.py --from model   # resume from a given stage
   python run_all.py --only figures
 
-הקוד יושב ב-code/, הנתונים הגולמיים ב-data/, וכל מה שנוצר נכתב ל-work/.
-ההפרדה הזו היא כל מה שצריך כדי להריץ במחשב חדש: אחרי download_data.py אין
-בתיקייה שום קובץ שנוצר במחשב אחר.
+Code lives in code/, raw data in data/, everything generated in work/.
 
-**סדר השלבים אינו שרירותי.** keyness חייב לרוץ לפני בניית הקורפוס, משום
-ש-bounding.py קורא את keyness_word_weights.csv - ובהיעדרו אחד מכללי החיתוך
-פשוט אינו פועל, בלי הודעת שגיאה, והקורפוס יוצא אחר. זו התקלה הכי שקטה
-בצינור הזה, ולכן היא כתובה כאן ולא רק ב-README.
+STAGE ORDER IS NOT ARBITRARY. keyness must run before the corpus is built,
+because bounding.py reads keyness_word_weights.csv - without it one trimming
+rule does not fire, with no error, and the corpus comes out different.
 """
 import os
 import shutil
@@ -24,8 +21,8 @@ import time
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CODE, DATA, WORK = (os.path.join(ROOT, d) for d in ("code", "data", "work"))
 
-# הקבצים ש-themes.py כותב לתיקייה הנוכחית, ושהאיורים והבדיקות קוראים
-# מ-final_refit/. עד עכשיו ההעתקה נעשתה ביד, ולכן היא לא הייתה משוחזרת
+# Files themes.py writes to the current directory, which the figures and
+# checks then read from final_refit/
 REFIT_FILES = ["topic_shares_by_decade.csv", "topic_labels.csv",
                "topic_lift_by_decade.csv", "topic_prevalence_by_decade.csv",
                "decade_digest.csv", "artifact_share_by_decade.csv"]
@@ -43,7 +40,7 @@ def py(script, *args):
 
 
 def snap_refit():
-    """העתקת פלטי ההתאמה אל final_refit/ - השלב שהיה חסר מהצינור."""
+    """Copy the fit outputs into final_refit/."""
     dest = os.path.join(WORK, "final_refit")
     os.makedirs(dest, exist_ok=True)
     for f in REFIT_FILES:
@@ -59,7 +56,7 @@ def stage_download():
 
 
 def stage_keyness():
-    # ההתאמה בין גודריידס ל-CMU, ואז טבלת משקלי הרגיסטר שה-bounding צורך
+    # match Goodreads to CMU, then the register weight table bounding needs
     py("keyness.py")
     sh(sys.executable, "-c",
        "import keyness; keyness.export_word_weights()")
@@ -80,9 +77,9 @@ def stage_figures():
 
 
 def stage_checks():
-    # verify_writeup רץ *אחרי* stability_curves, לא לפניו: ארבע מתוך 36
-    # הבדיקות קוראות את all_topic_stability.csv, ובריצה נקייה הקובץ עדיין
-    # לא קיים - אז הן דולגו בשקט והדוח הראה 32/32 במקום 36/36
+    # verify_writeup runs AFTER stability_curves, not before: four of its 36
+    # checks read all_topic_stability.csv, and on a clean run that file does
+    # not exist yet - so they were skipped silently and it printed 32/32
     py("stability_curves.py")
     py("stability.py")
     py("sf_stability.py")

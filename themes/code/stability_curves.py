@@ -1,18 +1,14 @@
 """
-שחזור לכל נושא מדווח: גם רשימת המילים וגם עקומת העשורים.
+Reproducibility per reported topic, for both the word list and the curve.
 
-שני דברים שונים נמדדים כאן, ולכן שניהם מדווחים בנפרד:
-  * cosine  - האם *רשימת המילים* של הנושא נוצרת מחדש כשמאמנים על מדגם אחר.
-  * curve r - האם *עקומת העשורים* שהדוח מצטט נוצרת מחדש. זו הטענה בפועל,
-    והיא יכולה לשרוד גם כשהגבול בין שני נושאים שכנים זז מהרצה להרצה.
+  cosine  - does the topic's WORD LIST re-form on another training sample?
+  curve r - does the DECADE CURVE the writeup quotes re-form? This is the
+            actual claim, and can survive when two neighbouring topics swap
+            their boundary.
 
-השיוך בין ההרצות נעשה בקוסינוס של שורות H על אוצר מילים משותף - אותה
-מתודולוגיה כמו stability.py, כדי שהמספרים יהיו בני-השוואה. שיוך לפי חפיפת
-מילים היה מחמיא לתוצאה: הוא בוחר את הנושא שדומה במילים ואז שואל אם המילים
-דומות.
-
-פלט: all_topic_stability.csv - העמודות cos_worst ו-curve_r_worst הן המקרה
-הגרוע מבין שלוש ההשוואות, לא הממוצע. הדוח מצטט את הגרוע.
+Refits are matched by cosine of H rows over a shared vocabulary. Matching on
+word overlap would flatter the result. Reported columns are the worst of the
+three comparisons, not the mean.
 """
 import numpy as np
 import pandas as pd
@@ -25,11 +21,11 @@ CORPUS = "themes_corpus_bounded.pkl"
 SRC = "final_refit"
 SEEDS = [42, 7, 13, 99]
 OUT = "all_topic_stability.csv"
-PARTIAL = 2010          # 2010-2017, עשור חלקי - מוחרג מכל חישוב
+PARTIAL = 2010          # 2010-2017, a partial decade - excluded everywhere
 
 
 def fit(df, seed):
-    """מדגם אימון משתנה, זרע NMF קבוע - כך שרק הדגימה משתנה בין ההרצות."""
+    """Varying training sample, fixed NMF seed, so only the sample changes."""
     idx = []
     for _, g in df.groupby("Decade"):
         idx.extend(g.sample(min(len(g), TH.FIT_PER_DECADE), random_state=seed).index)
@@ -45,7 +41,7 @@ def fit(df, seed):
 
 
 def aligned(H, names, pos, n_vocab):
-    """H מנורמלת ומוטלת על אוצר מילים משותף, אחרת הקוסינוס אינו מוגדר."""
+    """H normalised onto a shared vocabulary, or the cosine is undefined."""
     M = np.zeros((H.shape[0], n_vocab))
     for c, w in enumerate(names):
         j = pos.get(w)
@@ -72,8 +68,9 @@ def main():
     rows = []
     for tid in sh.columns:
         target = set(str(lab[tid]).split(", ")[:12])
-        # איתור הנושא המפורסם *בתוך* הרצת העוגן. זה זיהוי, לא מדידה - ההסכמה
-        # עצמה נמדדת בקוסינוס מול ההרצות האחרות
+        # locate the reported topic inside the anchor run. This is
+        # identification, not measurement: agreement itself is the cosine
+        # against the other runs
         a = max(range(TH.N_TOPICS),
                 key=lambda t: len(set(anchor_names[np.argsort(-anchor_H[t])[:12]]) & target))
         ref = sh.loc[dec, tid].values

@@ -1,8 +1,8 @@
 """
-שלושה איורים עצמאיים לדוח המקוצר, בגודל ובגופן שמתאימים למסמך Word.
+Three standalone figures for the writeup, sized and set for Word.
 
-הכל נקרא מ-final_refit/ - אין כאן שום התאמת מודל, ולכן האיורים תמיד עקביים
-עם המספרים שבטקסט.
+Everything is read from final_refit/. No model is fitted here, so the figures
+are always consistent with the numbers in the text.
 """
 import numpy as np
 import pandas as pd
@@ -13,7 +13,7 @@ from matplotlib.patches import Rectangle
 from matplotlib.lines import Line2D
 
 SRC = "final_refit"
-PARTIAL = 2010                      # 2010-2017, עשור חלקי - מוחרג מכל חישוב
+PARTIAL = 2010                      # 2010-2017, a partial decade - excluded everywhere
 INK, MUTED, HAIR = "#1a1a1a", "#6b6b6b", "#d8d8d8"
 BLUE, RED, GREEN = "#1f4e79", "#a01f1f", "#1e8449"
 
@@ -40,14 +40,14 @@ def full_decades(sh):
 
 
 def order_by_peak(sh, dec):
-    """סדר לפי argmax גולמי. החלקה מזיזה פסגות מאומתות ולכן אינה בשימוש."""
+    """Order by raw argmax. Smoothing moves verified peaks, so it is not used."""
     rows = [(dec[int(sh.loc[dec, t].values.argmax())], -float(sh.loc[dec, t].mean()), t)
             for t in sh.columns]
     return [t for _, _, t in sorted(rows)], {t: d for d, _, t in rows}
 
 
 def dec_label(d):
-    """1900 ו-2000 שניהם "00s" על אותו ציר, ולכן הקצוות נכתבים במלואם."""
+    """1900 and 2000 both read "00s" on one axis, so the ends are spelled out."""
     return f"{d}s" if d % 100 == 0 else f"{str(d)[2:]}s"
 
 
@@ -56,7 +56,7 @@ def short(lab, t, k=4):
 
 
 def peak_span(lift, t, dec, peak_d):
-    """טווח העשורים שרווח הסמך שלהם חופף לזה של עשור השיא."""
+    """Decades whose confidence interval overlaps that of the peak decade."""
     i = dec.index(peak_d)
     lo0, hi0 = lift.loc[peak_d, f"{t}_lo"], lift.loc[peak_d, f"{t}_hi"]
     a = b = i
@@ -67,13 +67,12 @@ def peak_span(lift, t, dec, peak_d):
     return dec[a], dec[b]
 
 
-# ------------------------------------------------------------- איור 1: מפת תקופות
+# --------------------------------------------------------- figure 1: the era map
 def fig_era_map(sh, lab, lift, dec, ordered, peak):
     """
-    צבע = מינימום-מקסימום בתוך השורה, ולכן הוא עונה על "מתי" בלבד. הוא אינו
-    יכול לענות על "כמה": נושא שזז 0.7 נקודת אחוז מקבל בדיוק אותו טווח צבעים
-    כמו נושא שזז 5.7. העמודה מימין נותנת את הגודל במספר - היחס בין העשור
-    הגבוה לנמוך - כך שאי אפשר לקרוא שורה שטוחה כתקופה חזקה.
+    Colour is min-max within each row, so it answers WHEN only, never HOW MUCH.
+    The right-hand column gives the magnitude as a number, so a flat row cannot be
+    misread as a strong era.
     """
     fig = plt.figure(figsize=(9.6, 5.6))
     gs = fig.add_gridspec(1, 2, width_ratios=[8.4, 1.3], left=.285, right=.965,
@@ -101,8 +100,8 @@ def fig_era_map(sh, lab, lift, dec, ordered, peak):
     axg.set_yticks([]); axg.set_xticks([1, 2, 3])
     axg.set_xticklabels(["1x", "2x", "3x"], size=7.5)
     axg.tick_params(length=0)
-    # התווית מפורשת: המספר הוא היחס בין העשור הגבוה לנמוך של אותו נושא, ולא
-    # מדד מופשט. "כמה הוא זז" נשמע כמו יחידה שצריך לפענח, וזה בדיוק מה שקרה
+    # the label is literal: the number is one topic's biggest decade divided by
+    # its smallest, not an abstract index
     axg.set_title("biggest decade\n÷ smallest", size=8.5, color=MUTED, loc="left",
                   pad=6, linespacing=1.35)
     for r, v in enumerate(ratio):
@@ -116,15 +115,16 @@ def fig_era_map(sh, lab, lift, dec, ordered, peak):
     plt.close(fig)
 
 
-# --------------------------------------------------------- איור 2: ארבע המגמות
+# ---------------------------------------------------- figure 2: the four trends
 def fig_headline(sh, lab, lift, ci, dec, peak):
     """
-    העשור החלקי (2010-2017) מצויר מקווקו ולא מושמט: הטקסט מצטט אותו, ולכן
-    קורא שאינו רואה אותו בגרף אינו יכול לאמת את הטענה. הוא מסומן במפורש
-    ואינו נכנס לחישוב השיא, הטווח או הממוצע.
+    The partial decade is drawn dotted rather than dropped: the text quotes it,
+    so a reader who cannot see it cannot check the claim. It enters no peak, span
+    or mean.
     """
-    # ארבעה נושאים בארבעה עשורי שיא שונים, לפי סדר כרונולוגי. כולם עוברים
-    # את בדיקת ההתאמה מחדש ב-r >= 0.98, הגבוה מבין כל הנושאים המדווחים
+    # four topics peaking in four different decades, in chronological order.
+    # All four reproduce across refits at r >= 0.98, the highest of any
+    # reported topic
     picks = [("T03", "Adventure and tales"), ("T04", "Detective fiction"),
              ("T06", "War writing"), ("T13", "Guides and how-to")]
     tail = [d for d in sh.index if d >= PARTIAL]
@@ -148,7 +148,7 @@ def fig_headline(sh, lab, lift, ci, dec, peak):
             ax.axvspan(lo_d - 5, hi_d + 5, color=RED, alpha=.09, lw=0, zorder=0)
         ax.plot([pk], [v[j]], "o", ms=6, color=RED, zorder=4)
         span = f"{pk}s" if hi_d == lo_d else f"{lo_d}s–{str(hi_d)[2:]}s"
-        # שיא בקצה הציר דוחף את התווית אל מחוץ לאיור, אז מזיזים אותה פנימה
+        # a peak at the axis edge pushes the label out of frame: pull it in
         ha, dx = ("center", 0) if j < len(dec) - 2 else ("right", 4)
         ax.annotate(f"{v[j]:.1f}%  {span}", (pk, v[j]), xytext=(dx, 8),
                     textcoords="offset points", ha=ha, size=9,
@@ -160,8 +160,8 @@ def fig_headline(sh, lab, lift, ci, dec, peak):
         ax.set_ylim(0, top * 1.35)
         ticks = dec + tail
         ax.set_xticks(ticks)
-        # רק העשור הראשון נכתב במלואו: 12 תוויות בחצי רוחב, ו-"2000s" ליד
-        # "10s*" נדבקות זו לזו. "1900s" בקצה השמאלי מספיק כדי לעגן את הציר
+        # only the first decade is spelled out: 12 labels in a half-width panel
+        # put "2000s" hard against "10s*". "1900s" at the left anchors the axis
         ax.set_xticklabels([(dec_label(d) if d == ticks[0] else f"{str(d)[2:]}s")
                             + ("*" if d >= PARTIAL else "") for d in ticks],
                            size=7.4)
@@ -177,7 +177,7 @@ def fig_headline(sh, lab, lift, ci, dec, peak):
     plt.close(fig)
 
 
-# ------------------------------------------------------- איור 3: מה עלה ומה ירד
+# ------------------------------------------- figure 3: what grew and what shrank
 def fig_rise_fall(sh, lab, dec):
     early = [d for d in dec if d <= 1940]
     late = [d for d in dec if d >= 1960]

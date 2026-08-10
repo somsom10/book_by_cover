@@ -1,17 +1,9 @@
 """
-גרסה משופרת של topic_trends.pdf.
+The long-form report, topic_trends_v2.pdf.
 
-קורא רק קבצי CSV מ-final_refit/ ולכן אינו מריץ שום מודל ואינו נוגע ב-themes.py
-או בתיקיית הבסיס הקפואה. הפלט: topic_trends_v2.pdf.
-
-מה שונה מהמקור:
-  1. סדר הנושאים בכל עמוד הוא לפי עשור השיא ולא לפי טווח. זה מה שהופך את
-     מפת החום לאלכסון קריא - רואים אילו נושאים שייכים לאיזו תקופה.
-  2. עמוד חדש של עלייה/ירידה (dumbbell) - השאלה "מה גדל ומה קטן" לא נענתה
-     בשום עמוד במקור.
-  3. הדיג'סט הטקסטואלי הפך למפת חום דו-כיוונית סביב 1.0, כשתאים שרווח הסמך
-     שלהם חוצה את 1.0 מוצגים דהויים. אותה לוגיקת מובהקות, קריאה בסריקה אחת.
-  4. העשור החלקי (2010-2017) מצויר מקווקו בכל מקום ומוחרג מכל חישוב.
+Reads only CSVs from final_refit/, so it fits no model. Topics are ordered by
+peak decade, which turns the heatmap into a readable diagonal; the partial
+decade (2010-2017) is dotted everywhere and excluded from every calculation.
 """
 import numpy as np
 import pandas as pd
@@ -24,8 +16,8 @@ from matplotlib.lines import Line2D
 
 SRC = "final_refit"
 OUT = "topic_trends_v2.pdf"
-PARTIAL_DECADE = 2010          # 2010-2017 - עשור חלקי, לא נכנס לחישובים
-PAGE = (11.7, 8.3)             # A4 לרוחב
+PARTIAL_DECADE = 2010          # 2010-2017, partial - excluded from calculations
+PAGE = (11.7, 8.3)             # A4 landscape
 
 INK, MUTED, HAIR = "#1a1a1a", "#6b6b6b", "#d8d8d8"
 BLUE, RED, GREEN, AMBER = "#1f4e79", "#b03a2e", "#1e8449", "#b9770e"
@@ -39,7 +31,7 @@ plt.rcParams.update({
 })
 
 
-# ---------------------------------------------------------------- טעינת נתונים
+# ------------------------------------------------------------------ data loading
 def load():
     sh = pd.read_csv(f"{SRC}/topic_shares_by_decade.csv", index_col=0) * 100
     lab = pd.read_csv(f"{SRC}/topic_labels.csv", index_col=0)["0"]
@@ -48,15 +40,16 @@ def load():
     art = pd.read_csv(f"{SRC}/artifact_share_by_decade.csv", index_col=0)
     counts = pv.groupby("decade")["n"].first()
 
-    # רוחב רווח הסמך לכל נושא/עשור, מתוך טבלת ה-lift: היחס בין חצי-הרוחב
-    # ל-lift מוכפל בחלק היחסי. שקול לרווח הסמך של ה-share עצמו.
+    # interval half-width per topic/decade, from the lift table: half-width
+    # over lift, times the share. Equivalent to the share's own interval
     ci = {}
     for t in sh.columns:
         half = (lift[f"{t}_hi"] - lift[f"{t}_lo"]) / 2
         ci[t] = (half / lift[t]).values * sh[t].values
     ci = pd.DataFrame(ci, index=sh.index)
 
-    # יציבות: הקובץ שומר תווית של 10 מילים ולא מזהה, אז מתאימים לפי תחילית
+    # stability: the file stores a 10-word label rather than an id, so match
+    # on the prefix
     stab = {}
     try:
         st = pd.read_csv("topic_stability.csv")
@@ -72,18 +65,14 @@ def load():
 
 
 def full_decades(sh):
-    """עשורים מלאים בלבד - כל חישוב (שיא, שיפוע, סדר) רץ עליהם."""
     return [d for d in sh.index if d < PARTIAL_DECADE]
 
 
 def order_by_peak(sh, dec):
     """
-    סדר לפי עשור השיא, כשהשיא הוא ה-argmax הגולמי.
-
-    ניסיתי החלקה בחלון 3 לפני הבחירה, כדי שעשור רועש בודד לא יזיז נושא שלם.
-    היא הזיזה את הבלש מ-1930 ל-1940 ואת המלחמה מ-1940 ל-1950 - כלומר ביטלה
-    בדיוק את שתי הפסגות שאומתו מול מקורות חיצוניים. השיא כאן חד מספיק כדי
-    שההחלקה תזיק יותר משתועיל, אז היא הוסרה.
+    Order by peak decade, using the raw argmax. A 3-decade smoothing window was
+    tried and removed: it moved detective from 1930 to 1940 and war from 1940 to
+    1950, cancelling exactly the peaks that match the historical record.
     """
     out = []
     for t in sh.columns:
@@ -98,12 +87,9 @@ def short(lab, t, k=3):
 
 def peak_span(lift, t, dec, peak_d):
     """
-    טווח השיא, ולא עשור בודד. עשור נכלל בטווח אם רווח הסמך של ה-lift שלו חופף
-    לזה של עשור ה-argmax, והוא רציף אליו.
-
-    זה נדרש משום ש-argmax על רמה שטוחה ממציא פסגה: ב-earth/planet/space העשורים
-    1960, 1970 ו-1980 נבדלים ב-0.1 נקודת אחוז ורווחי הסמך שלהם חופפים כמעט לגמרי,
-    כך שבחירת 1970 היא הגרלה. הצגת הטווח היא מה שהמדידה באמת תומכת בו.
+    A peak span rather than one decade: decades whose lift interval overlaps the
+    argmax decade's and is contiguous with it. argmax over a flat stretch invents a
+    peak - for earth/planet/space the 1960s-1980s differ by 0.1pp.
     """
     i = dec.index(peak_d)
     lo0, hi0 = lift.loc[peak_d, f"{t}_lo"], lift.loc[peak_d, f"{t}_hi"]
@@ -120,7 +106,7 @@ def span_label(lo, hi):
 
 
 def draw_series(ax, sh, ci, t, dec_all, dec_full, colour=BLUE, band=True):
-    """קו מגמה אחד. העשור החלקי מקווקו ובלי רצועת סמך - הוא לא ניתן להשוואה."""
+    """One trend line. The partial decade is dotted and unbanded."""
     v_all = sh[t].values
     n_full = len(dec_full)
     ax.plot(dec_full, v_all[:n_full], lw=1.9, color=colour, solid_capstyle="round")
@@ -133,7 +119,7 @@ def draw_series(ax, sh, ci, t, dec_all, dec_full, colour=BLUE, band=True):
                 color=colour, alpha=.55)
 
 
-# ============================================================ עמוד 1: מפת תקופות
+# ================================================================ page 1: era map
 def page_era_map(pdf, sh, lab, counts, dec, ordered, peak, stab):
     fig = plt.figure(figsize=PAGE)
     gs = fig.add_gridspec(1, 3, width_ratios=[6.4, 1.15, 1.15],
@@ -145,7 +131,7 @@ def page_era_map(pdf, sh, lab, counts, dec, ordered, peak, stab):
     norm = (M - M.min(axis=1, keepdims=True)) / np.where(rng == 0, 1, rng)
     ax.imshow(norm, aspect="auto", cmap="magma", interpolation="nearest")
 
-    # סימון תא השיא: זה מה שהופך את המפה מ"צבעים" ל"מתי"
+    # marking the peak cell is what turns the map from "colours" into "when"
     for r, t in enumerate(ordered):
         ax.add_patch(Rectangle((dec.index(peak[t]) - .5, r - .5), 1, 1,
                                fill=False, ec="white", lw=1.6))
@@ -199,7 +185,7 @@ def page_era_map(pdf, sh, lab, counts, dec, ordered, peak, stab):
     pdf.savefig(fig); plt.close(fig)
 
 
-# ========================================================= עמוד 2: ריבוי גרפים
+# ====================================================== page 2: small multiples
 def page_small_multiples(pdf, sh, ci, lab, lift, dec_all, dec, ordered, peak, stab):
     n = len(ordered)
     ncol = 6
@@ -218,7 +204,7 @@ def page_small_multiples(pdf, sh, ci, lab, lift, dec_all, dec, ordered, peak, st
         if hi_d > lo_d:
             ax.axvspan(lo_d - 5, hi_d + 5, color=RED, alpha=.09, lw=0, zorder=0)
         ax.plot([pk], [v[j]], "o", ms=4.2, color=RED, zorder=4)
-        # שיא בקצה הציר דוחף את התווית אל תוך תוויות הצירים, אז מזיזים אותה פנימה
+        # a peak at the axis edge pushes the label into the tick labels: pull it in
         ha, dx = ("center", 0)
         if j <= 1:
             ha, dx = "left", 3
@@ -262,12 +248,11 @@ def page_small_multiples(pdf, sh, ci, lab, lift, dec_all, dec, ordered, peak, st
     pdf.savefig(fig); plt.close(fig)
 
 
-# ====================================================== עמוד 3: מה עלה ומה ירד
+# ============================================= page 3: what grew and what shrank
 def page_rise_fall(pdf, sh, lab, lift, dec, ordered, peak, stab):
     """
-    שני חלונות: משמאל dumbbell של המחצית הראשונה מול השנייה, מימין ציר זמן
-    של עשורי השיא. הראשון עונה "מה גדל", השני "מתי כל נושא שייך".
-    קצוות בודדים רועשים, ולכן ההשוואה היא בין ממוצע 1900-1940 לממוצע 1960-2000.
+    Dumbbell of first half against second, plus a timeline of peak decades.
+    Endpoints are noisy, so the comparison is mean 1900-1940 against 1960-2000.
     """
     early = [d for d in dec if d <= 1940]
     late = [d for d in dec if d >= 1960]
@@ -306,8 +291,8 @@ def page_rise_fall(pdf, sh, lab, lift, dec, ordered, peak, stab):
               fontsize=7, loc="upper center", bbox_to_anchor=(.5, -.075),
               ncol=3, frameon=False)
 
-    # רשימת השיאים לפי עשור: שורה לעשור, הנושאים ששיאם בו מסודרים משמאל לימין.
-    # אותו מידע כמו האלכסון בעמוד 1, אבל כרשימה שאפשר להקריא בקול
+    # peaks listed by decade: one row per decade, the topics peaking there laid
+    # out left to right. Same information as page 1's diagonal, as a list
     by_dec = {}
     for t in ordered:
         by_dec.setdefault(peak[t], []).append(t)
@@ -362,12 +347,11 @@ def page_rise_fall(pdf, sh, lab, lift, dec, ordered, peak, stab):
     pdf.savefig(fig); plt.close(fig)
 
 
-# ====================================================== עמוד 4: ייחוד לפי עשור
+# ================================================== page 4: distinctiveness by decade
 def page_lift(pdf, sh, lab, lift, dec, ordered, counts):
     """
-    lift = חלקו של הנושא בעשור חלקי הממוצע שלו על פני העשורים. 1.0 = עשור טיפוסי.
-    תא שרווח הסמך שלו חוצה 1.0 מצויר דהוי - אותה לוגיקת מובהקות של הדיג'סט
-    המקורי, רק שאפשר לסרוק אותה במבט אחד.
+    lift = a topic's share of a decade over its mean across decades. Cells whose
+    interval crosses 1.0 are faded.
     """
     L = lift.loc[dec, ordered].values.T
     lo = lift.loc[dec, [f"{t}_lo" for t in ordered]].values.T
@@ -379,7 +363,7 @@ def page_lift(pdf, sh, lab, lift, dec, ordered, counts):
     lim = max(abs(np.log2(L)).max(), .01)
     im = ax.imshow(np.log2(L), aspect="auto", cmap="RdBu_r", vmin=-lim, vmax=lim,
                    alpha=1.0, interpolation="nearest")
-    # דהייה של התאים הלא מובהקים ע"י שכבת לבן חלקית
+    # fade the non-significant cells with a partial white overlay
     ax.imshow(np.ones_like(L), aspect="auto", cmap="gray", vmin=0, vmax=1,
               alpha=np.where(sig, 0.0, 0.72), interpolation="nearest")
 
@@ -419,7 +403,7 @@ def page_lift(pdf, sh, lab, lift, dec, ordered, counts):
     pdf.savefig(fig); plt.close(fig)
 
 
-# ============================================================== עמוד 5: הטבלה
+# ================================================================= page 5: table
 def page_table(pdf, sh, lab, dec_all, dec, ordered, counts):
     fig = plt.figure(figsize=PAGE)
     ax = fig.add_axes([.235, .10, .72, .74])
@@ -456,8 +440,7 @@ def page_table(pdf, sh, lab, dec_all, dec, ordered, counts):
     pdf.savefig(fig); plt.close(fig)
 
 
-# ================================================ עמוד 6: אימות מול מכשיר שני
-# ================================================ עמוד 6: מה הוצא ולמה זה חשוב
+# ============================== page 6: what was excluded, and why it matters
 def page_excluded(pdf, art, dec_all, stab):
     a = art[art.index >= 1900]
     fig = plt.figure(figsize=PAGE)
@@ -495,7 +478,7 @@ def page_excluded(pdf, art, dec_all, stab):
              "Showing the excluded mass rather than hiding it is what makes the rest legible.",
              size=8.2, va="top", family="DejaVu Sans", linespacing=1.55, color=INK)
 
-    # חצי תחתון: התפלגות היציבות, ולידה מה מותר לטעון ומה לא
+    # lower half: the stability distribution, and what may be claimed from it
     ax3 = fig.add_axes([.09, .125, .40, .275])
     if stab:
         rv = np.array(sorted(stab.values()))
@@ -540,7 +523,7 @@ def page_excluded(pdf, art, dec_all, stab):
     pdf.savefig(fig); plt.close(fig)
 
 
-# --------------------------------------------------------------------- ראשי
+# ---------------------------------------------------------------------- main
 def main():
     sh, lab, lift, ci, counts, art, stab = load()
     dec_all = list(sh.index)

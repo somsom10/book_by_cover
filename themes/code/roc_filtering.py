@@ -1,10 +1,10 @@
 """
-עקומות ROC ועקומת התמורה של הסינון.
+ROC and cost curves for the text filter.
 
-שתי שאלות שונות, ולכן שתי עקומות:
-1. האם ציון הרגיסטר (מבוסס מילים, רציף) מסכים עם הכללים (מבוססי תבנית,
-   בינאריים)? שתי שיטות בלתי תלויות לאותה מטרה; הסכמה ביניהן היא ראיה.
-2. כמה עלילה נהרסת ככל שמסננים יותר? זו העקומה שקובעת היכן לעצור.
+1. Does the register score (word-based) agree with the rules (pattern-based)?
+   Independent methods aimed at the same target, so agreement is evidence.
+2. How much real plot is destroyed as the filter is pushed harder? That curve
+   decides where to stop.
 """
 import re, numpy as np, pandas as pd
 import matplotlib
@@ -42,7 +42,7 @@ def main():
 
     fig, ax = plt.subplots(1, 2, figsize=(11, 4.6))
 
-    # --- עקומה 1: ROC ---
+    # --- curve 1: ROC ---
     curves = []
     y1 = np.r_[np.ones(int((flagged & ok_g).sum())), np.zeros(int(ok_c.sum()))]
     x1 = np.r_[gs[flagged & ok_g], cs[ok_c]]
@@ -60,12 +60,12 @@ def main():
     ax[0].set_title("Does the word-based register score\nagree with the rule-based filter?")
     ax[0].legend(fontsize=7, loc="lower right"); ax[0].grid(alpha=0.3)
 
-    # --- עקומה 2: כמה עלילה נהרסת ככל שמסננים יותר ---
+    # --- curve 2: how much plot is destroyed as the filter is pushed ---
     L = pd.read_csv("bounding_removed_log.csv")
     L = L[L.content_words >= 3].sort_values("register_weight", ascending=False)
     tot = L.chars.sum()
     frac = np.cumsum(L.chars.values) / tot
-    # שיעור התווים שהוסרו והיו למעשה עלילה, מצטבר
+    # running share of removed characters that were in fact plot
     plotty = np.cumsum((L.overlap_with_plot.values >= 0.5) * L.chars.values) \
              / np.maximum(np.cumsum(L.chars.values), 1)
     ax[1].plot(frac * 100, plotty * 100, lw=2, color="crimson")

@@ -1,7 +1,9 @@
-"""אילו נושאים ספציפיים אינם משוחזרים? זה מה שצריך לדווח לצד כל מגמה."""
+"""
+Which specific topics fail to reproduce across refits.
+
+Run from work/ with code/ on the import path; all paths here are relative.
+"""
 import sys, numpy as np, pandas as pd
-# מריצים מתוך תיקיית ההגשה, ולכן הנתיבים היחסיים תקפים כמו שהם.
-# בגרסה הקודמת היה כאן chdir לנתיב מוחלט שקיים רק במחשב אחד
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import NMF
 import themes as TH
@@ -35,10 +37,10 @@ for t in range(K):
     rows.append((min(sims), labels[t]))
 rows.sort()
 out = pd.DataFrame(rows, columns=["reproducibility", "topic"])
-# הספים חושבו ולא נבחרו: מבחן רגישות לזרעים הראה שרעש המדד עצמו הוא
-# כ-0.05 (K=30 נתן 0.848/0.828/0.755 על שלוש קבוצות זרעים). סף 0.95 היה
-# חד יותר מדיוק המדידה, ולכן 0.94 ו-0.97 הופרדו לשווא. הספים כאן רחבים
-# מרוחב הרעש, ולכן הם מפרידים דרגות ולא שכנים.
+# Thresholds were measured, not chosen. A seed sensitivity test put the
+# metric's own noise at about 0.05 (K=30 gave 0.848/0.828/0.755 across three
+# seed sets), so a 0.95 cut would be sharper than the measurement and would
+# separate 0.94 from 0.97 for no reason. These cuts are wider than the noise.
 out["verdict"] = np.where(out.reproducibility < 0.75, "unstable",
                  np.where(out.reproducibility < 0.90, "moderate", "solid"))
 out.to_csv("topic_stability.csv", index=False)

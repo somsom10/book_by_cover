@@ -1,17 +1,11 @@
 """
-בניית מטמון הקורפוס שכל שאר הצינור קורא ממנו: themes_corpus_bounded.pkl.
+Builds themes_corpus_bounded.pkl, the corpus the rest of the pipeline reads.
 
-השלב היחיד שאינו נמצא ב-build_corpus של themes.py הוא bounding: חיתוך
-הפסקאות השיווקיות מקצוות התקציר (ראו bounding.py). הוא נשמר בסקריפט נפרד
-ולא נתפר לתוך clean_corpus כדי ש-themes.py יישאר בעל התנהגות אחת בלבד -
-המטמון שנבנה כאן הוא מה שהוגש, ומטמון שנבנה בלעדיו הוא ריצת ביקורת.
+The one step not already in themes.build_corpus is bounding (see bounding.py).
+Order decides the result: load -> clean_corpus -> bounding -> lemmatise.
+Lemmatising must be last, or Lemmas describe the text from before the trim.
 
-סדר הפעולות קובע ולכן הוא מפורש כאן:
-  טעינה מהמאגר הגולמי  ->  clean_corpus  ->  bounding  ->  למטיזציה
-הלמטיזציה אחרונה, אחרת ה-Lemmas היו של הטקסט שלפני החיתוך והחיתוך לא היה
-מגיע למודל כלל.
-
-זמן ריצה: עשרות דקות. הקובץ הגולמי הוא 2GB ו-spaCy רץ על ~73 אלף מסמכים.
+Runtime: tens of minutes, spaCy over ~73k documents.
 """
 import sys
 
@@ -30,28 +24,26 @@ def main(out=OUT, limit=None):
     print("Streaming Goodreads (2.36M lines)...")
     df = TH.load_goodreads_full()
     if limit:
-        # מצב עשן: מריצים על מדגם קטן רק כדי לוודא שהצינור עובר מקצה לקצה
+        # smoke mode: a small sample, only to prove the pipeline runs end to end
         df = df.sample(min(limit, len(df)), random_state=42).reset_index(drop=True)
         print(f"  smoke test on {len(df)} documents")
     print(f"  {len(df)} works after de-duplicating editions")
 
-    # התיחום עצמו: חיתוך הקצוות, ואז מחיקת שמות עיתונים וקמעונאים כצירוף
-    # ("New York Times", "Barnes & Noble") וכיווץ רווחים. שתי הפעולות יחד
-    # הן מה שמייצר את הקורפוס הקנוני; הראשונה לבדה מייצרת קורפוס אחר
+    # Trim the edges, then delete newspaper and retailer names as phrases.
+    # Both steps together produce the canonical corpus; the first alone does not
     def bound(summaries):
-        # קבוצת המשפטים החוזרים נגזרת מהטקסט הנקי, וזהו הכלל שמוצא מו"לים
-        # שאיש לא רשם ("An NYRB Classics Original", "From the Paperback edition")
-        # 10 ולא 5, שהוא ברירת המחדל של evaluate_bounding: הסף נמדד מול
-        # הקורפוס המקורי ולא נבחר. 5 מוחק 15 מסמכים עודפים, 12 משאיר 10
-        # מסמכים עם פרסומת, ו-10 משחזר את הקורפוס המקורי בדיוק - 73,411
-        # מסמכים, אפס הבדלים. זהו גם הסף של strip_repeated_sentences
+        # The repeated-sentence set comes from the cleaned text; this is the
+        # rule that finds publishers nobody listed. 10 rather than
+        # evaluate_bounding's default of 5 was measured against the original
+        # corpus: 5 drops 15 documents too many, 12 leaves 10 with advertising,
+        # and 10 reproduces it exactly at 73,411 documents
         rep = E.repeated_sentences(summaries, min_docs=REPEAT_MIN_DOCS)
         return [B.strip_publication_names(
                     B.bound_summary(t, repeated=rep).text)[0]
                 for t in summaries]
 
-    # במצב עשן הסטטיסטיקה נכתבת לשם אחר: אחרת ריצת בדיקה על 300 מסמכים
-    # דורסת את קובץ הזיהום-לפי-עשור של הריצה האמיתית
+    # in smoke mode the stats go to a different filename: otherwise a 300
+    # document test run overwrites the real run's per-decade cleaning stats
     print("Cleaning and bounding...")
     df = TH.clean_corpus(
         df, bound_fn=bound,

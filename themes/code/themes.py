@@ -1,15 +1,13 @@
 """
-זיהוי נושאים (themes) והמגמות שלהם לאורך העשורים, באמצעות NMF על מטריצת TF-IDF.
+Theme detection over decades: NMF on a TF-IDF matrix of book descriptions.
 
-למה לא TextRank: נמדד שציון ה-PageRank על גרף ההופעה המשותפת פרופורציוני
-כמעט לחלוטין לדרגת הצומת (מקדם שונות 0.173), ודרגת הצומת בתורה עוקבת אחרי
-תדירות המילה. כלומר TextRank כאן שקול בקירוב לספירת מילים משוקללת, ולכן החזיר
-את אותן מילים כלליות (book, story, life) בכל 52 העשורים.
+One topic set is fixed for the whole corpus and each topic's weight is measured
+per decade, so a perennial theme like love gets a curve over time instead of
+disappearing for not being distinctive to any one decade.
 
-הרעיון כאן הפוך: במקום לדרג מילים *שונות* בכל עשור, קובעים אוסף נושאים אחד
-לכל המאגר, ומודדים את *המשקל* של כל נושא בכל עשור. כך נושא נצחי כמו אהבה נשאר
-בניתוח תמיד ומקבל עקומה לאורך הזמן, במקום להיעלם מפני שהוא אינו "ייחודי"
-לאף עשור. פירוט מלא ב-METHODS.md.
+TextRank was tried first and discarded: its PageRank score tracked node degree
+almost exactly (CV 0.173), making it a weighted word count that returned the
+same generic words in every decade.
 """
 
 import hashlib
@@ -24,83 +22,54 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 import text as T
 
-# --- הגדרות ---
-# הקורפוס הקנוני הוא זה שעבר bounding, ולכן הוא ברירת המחדל. הקובץ נבנה
-# על ידי build_bounded_corpus.py; build_corpus לבדו *אינו* מבצע bounding,
-# ולכן אסור לתת לו לייצר קובץ בשם הזה - ראו הבדיקה ב-main
+# --- configuration ---
+# The canonical corpus is the bounded one, so it is the default. The file is
+# built by build_bounded_corpus.py; build_corpus alone does NOT bound, so it
+# must never be allowed to produce a file under this name - see the check in main
 CACHE_PATH = "themes_corpus_bounded.pkl"
 
-# תיקיית הפלט. ריצת הביקורת על CMU כותבת לתיקייה נפרדת, אחרת היא הייתה
-# דורסת את התוצאות של גודריידס - וההשוואה בין השתיים היא כל מטרתה
+# Output directory. The CMU control run writes to its own folder, or it would
+# overwrite the Goodreads results - and comparing the two is its whole point
 OUT_DIR = "."
 
 
 def _out(name):
-    """נתיב פלט בתוך OUT_DIR, שנוצרת אם אינה קיימת."""
     os.makedirs(OUT_DIR, exist_ok=True)
     return os.path.join(OUT_DIR, name)
-# היקף הזיהום לפי עשור. נכתב בזמן הניקוי, כי רק אז ידוע מה נמחק
+# contamination per decade, written during cleaning since only then is it known
 CLEAN_STATS_PATH = "artifact_clean_stats.csv"
 
-# מספר הנושאים. 20-30 הוא טווח סביר לקורפוס בסדר גודל כזה; יש לקרוא את רשימות
-# המילים שמתקבלות ולהתאים אם הנושאים אינם מובנים
-# 22 ולא 25. סריקת K על הקורפוס הנקי (12/15/18/22/25) הראתה ש-25 מפצל
-# נושאים אמיתיים לשאריות: מדע בדיוני נשבר לשניים (earth/planet מול
-# time/travel/space), נושא הנשים משוכפל ל-"young, boy, lady, handsome",
-# ונוצרים שני נושאים ריקים. ב-22 כל נושא ניתן לשיום, ומדע בדיוני, אמנות,
-# שפה ואגדות מופיעים כל אחד בנפרד ובבירור. מתחת ל-18 קורה ההפך - הנושאים
-# מתרחבים ומתמזגים (משפחה, ילדים ונערות הופכים לנושא אחד)
+# Number of topics. A K sweep (12/15/18/22/25) showed topics widening and
+# merging below 18, and splitting into remainders at the top of the range
 N_TOPICS = 25
 
-# תקרת ספרים לעשור. אין כאן ויתור על דיוק לטובת מהירות: בגודל מדגם 5000
-# רווח הסמך של נתח נושא הוא כבר +-0.75 נקודות אחוז, ותוספת ספרים מעבר לכך
-# אינה משנה את התוצאה בפועל. עשורים קטנים יותר נלקחים במלואם.
-# 10,000 ולא 5,000. שבעה מתוך שנים-עשר העשורים נחסמו על ידי המכסה הקודמת,
-# כלומר היו זמינים עוד ספרים והם פשוט לא נדגמו. המדידה הראתה שהגדלת מדגם
-# האימון מ-1,500 ל-4,000 לעשור העלתה את שחזור נושא המדע הבדיוני מ"לא נוצר
-# כלל" ל-0.990, ולכן יש טעם ממשי בעוד נתונים. העשורים המוקדמים אינם
-# מושפעים - הם ממילא מכילים את כל מה שקיים
+# Books per decade; smaller decades are taken whole. 10,000 rather than 5,000
+# because seven of twelve decades were capped by the old quota - more books were
+# available and simply were not sampled
 PER_DECADE_CAP = 10000
 
-# תקרה נפרדת לשלב *אימון* המודל. הנושאים נלמדים ממדגם מאוזן בין העשורים,
-# אחרת 390 אלף ספרי שנות ה-2010 היו קובעים לבדם את מרחב הנושאים, ולתוכן של
-# המאה ה-19 לא היה נושא להישען עליו. הנתחים עצמם מחושבים על כל הקורפוס.
-# 4,000 ולא 1,500. הסף הקודם נבחר כ"המספר הגדול ביותר ששומר על איזון"
-# (העשור הדל ביותר מחזיק 1,474), אך מדידה הראתה שהוא היה יקר: נושא המדע
-# הבדיוני כלל לא נוצר ב-1,500, נוצר ולא היה יציב ב-2,500 (0.587), וב-4,000
-# הוא מגיע ל-0.990 ומזהה את עצמו - earth, human, planet, space, alien,
-# science_fiction, universe. הבעיה לא הייתה פרופורציה אלא רעש דגימה.
-# האיזון נשמר בקירוב: העשורים המוקדמים תורמים את כל מה שיש להם (1,474-1,574)
-# והמאוחרים 4,000, כלומר יחס 2.7:1 במקום 300:1 ללא הגבלה
+# Separate cap for TRAINING, so the topic space is not defined by the 2010s
+# alone. 4,000 rather than 1,500 was measured, not guessed: science fiction did
+# not form at all at 1,500, was unstable at 2,500 (0.587), and reaches 0.990 at
+# 4,000. Shares themselves are computed over the whole corpus
 FIT_PER_DECADE = 4000
 
-# אורך מזערי של תקציר אחרי הניקוי
+# minimum blurb length after cleaning
 MIN_SUMMARY_CHARS = 200
 
-# העשור המוקדם ביותר שנכנס לניתוח.
-#
-# הסף היה 1790 ועודכן ל-1900 (2026-08-07) בהחלטה מפורשת: העשורים שלפני 1900
-# דקים מדי. 66 עד 984 ספרים לעשור מול 1,576 עד 4,808 מ-1900 ואילך, רווח סמך
-# של 4.4 נקודות אחוז על נתח של 11.5% בשנות ה-1800, ורעש ביבליוגרפי של 16%
-# מול 6% בשנות ה-2010. מעבר לדקות יש הטיית שרידות: גודריידס מקטלג ספרים
-# שהגיעו למהדורה מודרנית, ולכן עשור מוקדם הוא הקאנון ומה שהודפס מחדש,
-# ולא מדגם של מה שראה אור.
-#
-# מה שנאבד בכך: פילוסופיה 1790, שירה רומנטית 1810, הרומן הוויקטוריאני,
-# וזינוק המדע הבדיוני של ורן ב-1860. אלה היו האימות ההיסטורי החזק ביותר של
-# השיטה, והם אינם ניתנים למדידה עוד. הבדיקות שנשארו בטווח מפורטות ב-
-# METADATA_VOCABULARY.md.
-#
-# הסינון נעשה לפני האימון ולא רק בדיווח, כי העשורים האלה גם השתתפו באימון
-# והטו את מרחב הנושאים. המטמון נשאר מלא, כדי שאפשר יהיה לשנות את הסף בלי
-# לבנות אותו מחדש - שינוי הערך הזה מספיק כדי לחזור ל-1790.
+# Earliest decade analysed. Raised from 1790: pre-1900 decades hold 66-984 books
+# against 1,576-4,808 after, with 16% bibliographic noise against 6%, and are a
+# canon of survivors rather than a sample of what was published. Applied before
+# training, since those decades also skewed the topic space. The cache stays
+# complete, so setting this back to 1790 needs no rebuild
 MIN_DECADE = 1900
 
-# --- שלב הניקוי ---
+# --- the cleaning step ---
 
-# טקסט של בתי דפוס וסריקה שנמצא בשדה description במקום תקציר אמיתי.
-# אלה אינם תיאורי ספרים כלל, ולכן נמחקים גם כשהם מופיעים פעם אחת בלבד.
-# נמדד: 7.7% מהשורות, 11% לפני 1900, עד 30% בעשורים בודדים.
+# Printer and scanner boilerplate found in the description field in place of a
+# real blurb. These are not book descriptions at all, so they are deleted even
+# when they appear only once. Measured: 7.7% of rows, 11% before 1900, up to 30%
+# in individual decades.
 _BOILERPLATE_RE = re.compile(
     "|".join([
         r"converted from its physical edition",
@@ -124,29 +93,28 @@ _BOILERPLATE_RE = re.compile(
     re.I,
 )
 
-# אורך הפתיח המשמש לזיהוי כפילות חלקית (ראו _dedupe)
+# prefix length used to detect near-duplicates (see _dedupe)
 _PREFIX_LEN = 120
 
 
 def _normalise(text):
-    """צמצום רווחים והורדה לאותיות קטנות, לצורך השוואת טקסטים."""
     return re.sub(r"\s+", " ", str(text).strip().lower())
 
 
-# משפט שחוזר על עצמו בין ספרים שונים אינו תיאור של ספר אלא טקסט של המוציא לאור.
-# הסף נמדד על הקורפוס: מ-10 ומעלה כל 55 סוגי המשפטים שנמצאו הם טקסט שיווקי או
-# פרסומת לסדרה, בלי אף מקרה של תוכן אמיתי, ואף מסמך אינו מתרוקן.
+# A sentence repeated across different books is not a description of a book but
+# publisher text. The threshold was measured on the corpus: at 10 and above, all
+# 55 sentence types found are marketing or series advertising, with no case of
+# real content, and no document is emptied.
 _SENTENCE_MIN_DOC_FREQ = 10
-# משפטים קצרים מכך אינם נספרים ואינם נמחקים לעולם ("full-color illustrations.")
+# shorter sentences are never counted and never removed ("full-color illustrations.")
 _MIN_SENTENCE_CHARS = 25
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 def _sentence_parts(text):
     """
-    מפצל טקסט למשפטים ומחזיר לכל אחד (המקור, מפתח מנורמל).
-    המפתח משמש להשוואה בלבד; המחיקה נעשית מהטקסט המקורי, כדי לשמר אותיות
-    גדולות - בלעדיהן מנתח חלקי הדיבר של spaCy אינו מזהה שמות פרטיים (PROPN).
+    Split into sentences as (original, normalised key). Matching uses the key,
+    deletion uses the original, so capitalisation survives for spaCy's tagger.
     """
     parts = []
     for piece in _SENT_SPLIT_RE.split(str(text).strip()):
@@ -158,22 +126,16 @@ def _sentence_parts(text):
 
 def strip_repeated_sentences(df, min_df=_SENTENCE_MIN_DOC_FREQ, verbose=True):
     """
-    מסיר משפטים החוזרים על עצמם בין ספרים שונים, ומשאיר את שאר המסמך במקום
-    למחוק אותו כולו - כך תקציר אמיתי שהודבקה בסופו פסקת פרסומת נשמר.
-
-    זה מחליף רשימת ביטויים קבועה, שאינה יכולה לנצח: מדידה על הקורפוס הראתה
-    לפחות שמונה הוצאות לאור עם אותה תבנית (Forgotten Books, Kessinger,
-    Endeavour, Oxford World's Classics, Penguin Classics, HarperPerennial,
-    Pushkin, General Books). ספירת תדירות מוצאת גם הוצאות שטרם נראו.
-
-    מחזיר (DataFrame מעודכן, קבוצת המשפטים שהוסרו). לכל שורה נוסף
-    StrippedChars, מספר התווים שהוסרו ממנה, לצורך מדידת היקף הזיהום.
+    Delete sentences that recur across different books; they are publisher text,
+    not description. Removes paragraphs rather than whole rows, so a real blurb
+    with advertising on the end survives. Adds StrippedChars per row.
     """
     split = df["Summary"].map(_sentence_parts)
 
     counts = Counter()
     for parts in split:
-        # פעם אחת למסמך: ספר שחוזר על משפט משלו לא ידחוף אותו מעל הסף
+        # once per document: a book repeating its own sentence cannot push it
+        # over the threshold
         counts.update({k for _, k in parts if len(k) >= _MIN_SENTENCE_CHARS})
     repeated = {k for k, n in counts.items() if n >= min_df}
 
@@ -202,31 +164,20 @@ def strip_repeated_sentences(df, min_df=_SENTENCE_MIN_DOC_FREQ, verbose=True):
 
 
 def _decade(df):
-    """עשור לכל שורה, בלי לשנות את ה-DataFrame עצמו."""
     return df["Year"] // 10 * 10
 
 
 def clean_corpus(df, verbose=True, stats_path=CLEAN_STATS_PATH, bound_fn=None):
     """
-    מסיר טקסט שאינו תיאור של הספר. חמישה שלבים, בסדר הזה:
+    Remove text that does not describe the book, in five ordered steps: printer
+    boilerplate, exact duplicates, near duplicates, repeated sentences, then the
+    length filter.
 
-    1. סינון טקסט של בתי דפוס - תוכן שידוע שהוא פסול, נמחק גם בעותק יחיד.
-       נשאר בתוקף גם אחרי שלב 4, משום שהוא תופס רשומות שכולן הודעת סריקה
-       ושאף משפט בהן אינו חוזר מספיק פעמים כדי לעבור את הסף.
-    2. ניכוי כפילויות מדויקות - אותו טקסט בדיוק על ספרים שונים. תופס למשל
-       פסקת ביוגרפיה של מחבר שהודבקה על כל ספריו (פסקה אחת על בלזק הופיעה
-       7 פעמים בין 1831 ל-1843), שאינה מכילה אף ביטוי מהרשימה שלמעלה.
-    3. ניכוי כפילויות חלקיות - אותה תבנית עם שינוי קל, למשל שם הוצאה אחר
-       ("hesperides press are republishing" מול "we are republishing").
-       ההשוואה נעשית לפי פתיח זהה, שהוא O(n) ותופס את התבנית שנמדדה.
-    4. הסרת משפטים חוזרים - ראו strip_repeated_sentences. שלב זה מוחק פסקאות
-       ולא שורות שלמות, ולכן תקציר אמיתי עם פרסומת בסופו שורד.
-    5. סינון לפי אורך - *חייב* לבוא אחרי שלב 4, שכן ההסרה מקצרת מסמכים
-       וחלקם יורדים מתחת לסף רק בעקבותיה.
+    Order is load-bearing. The length filter must come last, since the earlier
+    steps and bound_fn shorten documents and push some below MIN_SUMMARY_CHARS.
 
-    בדרך נאספת חלוקה לפי עשור של היקף הזיהום, ונכתבת ל-stats_path. זהו ממצא
-    על המאגר ולא רק אבחון: הוא מכמת כמה מ"התקציר" בעשורים המוקדמים אינו
-    תקציר כלל.
+    bound_fn takes the whole series, not one document, because bounding needs the
+    repeated-sentence set derived from the corpus at this point.
     """
     n0 = len(df)
     books0 = _decade(df).value_counts()
@@ -250,22 +201,25 @@ def clean_corpus(df, verbose=True, stats_path=CLEAN_STATS_PATH, bound_fn=None):
 
     df, removed_sentences = strip_repeated_sentences(df, verbose=verbose)
 
-    # שלב 4.5: תיחום. הוא *חייב* לרוץ כאן, בין הסרת המשפטים החוזרים לבין
-    # סינון האורך, ולא אחרי clean_corpus - התיחום מקצר מסמכים, וחלקם יורדים
-    # מתחת ל-MIN_SUMMARY_CHARS רק בעקבותיו. הרצה בסדר אחר מייצרת קורפוס
-    # אחר ב-4% מהמסמכים, ומכאן מודל אחר לגמרי. bound_fn מועבר מבחוץ כדי
-    # ש-themes.py לא יהיה תלוי ב-bounding.py
-    # bound_fn מקבל את כל הסדרה ולא מסמך בודד, משום שהתיחום זקוק לקבוצת
-    # המשפטים החוזרים - והיא נגזרת מהקורפוס *בשלב הזה*, אחרי הניקוי. חישוב
-    # שלה על הטקסט הגולמי מחזיר קבוצה גדולה מדי ומוחק 35 מסמכים עודפים
+    # Step 4.5: bounding. It MUST run here, between repeated-sentence removal
+    # and the length filter, not after clean_corpus - bounding shortens
+    # documents and some drop below MIN_SUMMARY_CHARS only as a result. Running
+    # it in another order produces a different corpus for 4% of documents, and
+    # from there an entirely different model. bound_fn is passed in from outside
+    # so that themes.py does not depend on bounding.py.
+    # bound_fn takes the whole series rather than one document, because bounding
+    # needs the repeated-sentence set - and that is derived from the corpus AT
+    # THIS POINT, after cleaning. Computing it on the raw text returns too large
+    # a set and deletes 35 documents too many
     if bound_fn is not None:
         df = df.copy()
         df["Summary"] = list(bound_fn(df["Summary"]))
         if verbose:
             print(f"    bounded {len(df)} summaries")
 
-    # התווים שהוסרו נספרים לפני סינון האורך, אחרת מסמכים שנמחקו *בגלל* ההסרה
-    # לא ייספרו בזיהום שגרם למחיקתם
+    # removed characters are counted before the length filter, or documents
+    # deleted BECAUSE of the removal would not be counted in the contamination
+    # that deleted them
     dec_strip = _decade(df)
     stripped = df["StrippedChars"].groupby(dec_strip).sum()
     kept_chars = df["Summary"].str.len().groupby(dec_strip).sum()
@@ -300,17 +254,19 @@ def clean_corpus(df, verbose=True, stats_path=CLEAN_STATS_PATH, bound_fn=None):
     return df
 
 
-# --- ביטויים רב-מיליים ---
+# --- multi-word terms ---
 #
-# "science fiction" הוא שם ז'אנר, לא שתי מילים. כשהוא נשאר מפוצל, המודל
-# שולח את science לנושא הפילוסופיה (פילוסופיה של המדע) ואת fiction לנושא
-# הביבליוגרפי - ולנושא המדע הבדיוני נשארות רק מילים גנריות של בניית עולם
-# (world, earth, human, power), שמשותפות לפנטזיה ולהרפתקאות. זו הסיבה
-# שהנושא קיבל ציון שחזור של 0.779 בלבד: אין לו עוגן ייחודי.
+# "science fiction" is a genre name, not two words. Left split, the model sends
+# science to the philosophy topic (philosophy of science) and fiction to the
+# bibliographic one - leaving science fiction with only generic worldbuilding
+# vocabulary
+# (world, earth, human, power) shared with fantasy and adventure. That is why
+# the topic only scored 0.779 for reproducibility: it has no unique anchor.
 #
-# אותו טיפול שניתן ל"New York Times" ב-bounding.py, מאותה סיבה בדיוק.
-# הצירופים נדבקים לטוקן אחד *אחרי* הלמטיזציה, ולכן אין צורך להריץ את
-# spaCy מחדש. המספרים בסוגריים הם מספר המסמכים שבהם הצירוף מופיע.
+# The same treatment "New York Times" gets in bounding.py, for exactly the same
+# reason. Phrases are glued into one token AFTER lemmatisation, so spaCy does
+# not have to be re-run. The numbers in brackets are how many documents contain
+# each phrase.
 MULTIWORD_TERMS = [
     ("science fiction", "science_fiction"),   # 625
     ("new york", "new_york"),                 # 1441
@@ -329,7 +285,6 @@ MULTIWORD_TERMS = [
 
 
 def join_multiword(lemmas):
-    """מדביק צירופים קבועים לטוקן אחד בעמודת הלמות."""
     for src, dst in MULTIWORD_TERMS:
         lemmas = lemmas.str.replace(src, dst, regex=False)
     return lemmas
@@ -337,11 +292,7 @@ def join_multiword(lemmas):
 
 def load_goodreads_full(path=T.GOODREADS_PATH, works_path=T.WORKS_PATH,
                         per_decade_cap=PER_DECADE_CAP, random_state=42):
-    """
-    טוען את מאגר Goodreads כשהוא מתוארך לפי שנת הפרסום המקורית ומנוכה כפילויות
-    מהדורה, ללא הדגימה האגרסיבית שבצינור ה-TextRank. הניקוי מתבצע אחרי הטעינה,
-    כדי שספירות הניקוי יהיו על כל מה שנאסף.
-    """
+    """Goodreads dated by original publication year and deduplicated by edition."""
     import gzip, json, random
     from collections import defaultdict, Counter
 
@@ -386,7 +337,6 @@ def load_goodreads_full(path=T.GOODREADS_PATH, works_path=T.WORKS_PATH,
 
 
 def _apply_multiword(df):
-    """מוחל בטעינה ולא בבנייה, כדי שהמטמון יישאר תקף בלי בנייה מחדש."""
     if "Lemmas" in df.columns:
         df = df.copy()
         df["Lemmas"] = join_multiword(df["Lemmas"])
@@ -395,8 +345,8 @@ def _apply_multiword(df):
 
 def _apply_min_decade(df, min_decade=MIN_DECADE):
     """
-    מסנן עשורים דלים מדי מכדי להיות ניתנים לקריאה. הסינון נעשה בטעינה ולא
-    בכתיבה למטמון, כדי שהמטמון יישאר מלא ושינוי הסף לא יחייב בנייה מחדש.
+    Drop decades too thin to read. Applied at load, so the cache stays complete
+    and changing MIN_DECADE needs no rebuild.
     """
     if min_decade is None:
         return df
@@ -409,7 +359,7 @@ def _apply_min_decade(df, min_decade=MIN_DECADE):
 
 
 def build_corpus(cache_path=CACHE_PATH, force_reload=False, min_decade=MIN_DECADE):
-    """טעינה, ניקוי ולמטיזציה. נשמר במטמון משום שהלמטיזציה היא החלק האיטי."""
+    """Load, clean and lemmatise. Cached: lemmatising is the slow part."""
     if not force_reload and os.path.exists(cache_path):
         print(f"Loading cached corpus from {cache_path}")
         return _apply_min_decade(_apply_multiword(pd.read_pickle(cache_path)), min_decade)
@@ -434,18 +384,12 @@ CMU_CACHE_PATH = "cmu_corpus.pkl"
 def build_cmu_corpus(cache_path=CMU_CACHE_PATH, force_reload=False,
                      min_decade=MIN_DECADE):
     """
-    אותו מסלול בדיוק על תקצירי CMU, כקבוצת ביקורת.
+    The same pipeline over CMU summaries, as a control.
 
-    תקצירי CMU הם תיאורי עלילה מוויקיפדיה, שנכתבו על ידי קוראים ולא על ידי
-    מוציאים לאור, ולכן אין בהם רגיסטר של טקסט שיווקי. השאלה שהריצה הזו
-    עונה עליה צרה ומוגדרת: **האם הצינור מייצר נושאי מטא-דאטה בעצמו, או
-    שהוא מוצא אותם משום שהם קיימים בגודריידס?** אם גם כאן ייווצרו נושאים
-    של מהדורות והוצאות לאור, הכשל הוא בשיטה. אם לא ייווצרו, הזיהום שנמדד
-    בגודריידס הוא תכונה אמיתית של המאגר.
-
-    כדי שההשוואה תהיה תקפה *שום* פרמטר אינו משתנה: אותו ניקוי, אותה
-    למטיזציה, אותו MIN_DECADE, אותו N_TOPICS, אותו זרע ואותו גלאי רעש.
-    ההבדל היחיד הוא מקור הטקסט.
+    CMU summaries are reader-written plot descriptions with no marketing register,
+    so this answers one question: does the pipeline manufacture metadata topics, or
+    find them because they exist in Goodreads? No parameter changes - only the
+    source of the text.
     """
     if not force_reload and os.path.exists(cache_path):
         print(f"Loading cached CMU corpus from {cache_path}")
@@ -465,18 +409,17 @@ def build_cmu_corpus(cache_path=CMU_CACHE_PATH, force_reload=False,
     return _apply_min_decade(df, min_decade)
 
 
-# --- רשימת המילים החסומות ---
-# מילים שאינן מתארות את תוכן הספר אלא את הספר כמוצר: טקסט שיווקי של המו"ל
-# ותיאורי מהדורה. הן מוסרות מאוצר המילים לפני ה-TF-IDF, ולכן אינן יכולות
-# להרכיב נושא. זו רשימה סטטית בכוונה - פשוטה לקריאה ולעריכה ביד.
+# --- the blocked word list ---
+# Words that describe the book as a product rather than its content: publisher
+# marketing and edition statements. They are removed from the vocabulary before
+# TF-IDF, so they cannot form a topic. Deliberately a static list - simple to
+# read and to edit by hand.
 
-# קבוצה א: נמדדה. ראו keyness.py ו-METADATA_VOCABULARY.md sec. 2.2b.
-# 8,680 ספרים הוצמדו בין Goodreads ל-CMU לפי כותרת, כך שלכל ספר יש שני
-# תיאורים של אותה עלילה - אחד של המו"ל ואחד של קורא בוויקיפדיה. המילים
-# שלהלן שכיחות פי 1.5 ומעלה בצד המו"ל בכ-85% מהעשורים לפחות, ובמקביל
-# הופעתן בתקציר אינה מנבאת דבר על הספר שמתחתיה (phi < 0.05, כמו isbn).
-# מילים שכן ניבאו את העלילה - war, adventure, mystery, world, america,
-# century, history - נשארו בחוץ במתכוון, אף שגם הן יצאו מובהקות
+# Group A: measured, see keyness.py. At least 1.5x more frequent on the
+# publisher side in ~85% of decades, and predicting nothing about the book
+# underneath (phi < 0.05). Words that DID predict the plot - war, adventure,
+# mystery, world, america, century, history - were left out despite also being
+# significant
 _KEYNESS_REGISTER = frozenset("""
 available beloved classic compelling delight depiction edition endure
 exciting extraordinary fan feature genre illuminate insight inspire
@@ -484,16 +427,14 @@ masterpiece original print profound range reader reading realism remarkable
 series style text unforgettable unique vivid weave
 """.split())
 
-# קבוצה ב: לא נמדדה, אך אינה יכולה להיות תוכן. אוצר המילים של הספר כחפץ
-# פיזי ושל מנגנון ההוצאה לאור. שלוש מהן נמדדו אגב כך ב-keyness וקיבלו
-# phi אפסי (isbn -0.003, reprint -0.003, anthology -0.001, paperback 0.010,
-# bestseller 0.013), מה שמאשר את הקריאה.
-# award, prize ו-winner נוספו בסבב האחרון: הן יצרו נושא שלם -
+# Group B: not measured, but cannot be content - the book as a physical object
+# and the publishing apparatus. Several scored a near-zero phi in passing (isbn
+# -0.003, paperback 0.010, bestseller 0.013), confirming the reading.
+# award, prize and winner were added later: they formed a whole topic -
 # "author, win, award, biography, experience, bestselle, prize, account" -
-# שחלקו שטוח לאורך כל שנים-עשר העשורים (3.6% -> 2.4%), כלומר אינו מגמה
-# אלא רעש שאוכל 3% מכל עשור. ה-keyness מאשר: award ‎+4.16 (10.0 מול 0.6
-# ל-10k ב-CMU), winner ‎+3.39, prize ‎+2.52. "win" נשארה - ניצחון בקרב
-# או במרוץ הוא תוכן
+# whose share is flat across all twelve decades (3.6% -> 2.4%), i.e. noise
+# eating 3% of every decade rather than a trend. "win" was kept - winning a
+# battle or a race is content
 _BIBLIOGRAPHIC_STOPWORDS = frozenset("""
 isbn ebook paperback hardcover hardback audiobook facsimile reprint reissue
 printing imprint typo typography typeset pagination page pages
@@ -502,33 +443,28 @@ errata imperfection scanned scan ocr blur blurred
 bestseller bestselling bestselle award awards prize winner fascinating
 """.split())
 
-# קבוצה ג: אוצר המילים של מנגנון הספר, שנוסף ביד למרות ש-phi הציב אותו
-# בתחום הביניים (0.05-0.11). הסיבה לכך שהמדידה מחמיצה דווקא אותו: תקצירי
-# CMU אינם עלילה טהורה, ויש בהם מסגור ביבליוגרפי משלהם - "the novel was
-# published in 1961", "in the final chapter". ואכן chapter הוא מהמילים
-# החזקות בצד ה-CMU (9.1 מול 2.3 ל-10k), ו-novel עומד שם על 26.4 ל-10k.
-# כשגם קורפוס הייחוס מזוהם באותו כיוון, phi של מילת מו"ל נמשך למעלה,
-# ולכן כאן ההכרעה ידנית. page כבר נמצא בקבוצה ב
+# Group C: book-apparatus vocabulary, added by hand although phi put it in the
+# grey zone (0.05-0.11). The measurement misses precisely this because CMU
+# summaries carry bibliographic framing of their own ("in the final chapter"),
+# so when the reference corpus is contaminated in the same direction a publisher
+# word's phi is pulled up
 _APPARATUS_STOPWORDS = frozenset("""
 publish publication volume illustration translation novella prose
 literature introduction
 """.split())
 
-# קבוצה ד: אוצר מילים חסר תוכן. לא מטא-דאטה ולא רגיסטר של מו"ל - פשוט
-# מילים שאינן מבחינות בין נושא לנושא.
-#
-# הן אותרו במדידה ולא בניחוש: בהרצה הקודמת ארבעה מתוך 25 הנושאים היו
-# בנויים כולם מהן -
+# Group D: contentless vocabulary - neither metadata nor register, simply words
+# that do not distinguish one topic from another. Found by measurement: in the
+# previous run four of the 25 topics were built entirely from them -
 #   thing, good, go, come, day, want, get, time
 #   find, way, help, discover, search, place, turn, home
 #   know, want, secret, people, feel, answer, need, fact
 #   world, people, great, ii, live, create, change, human
-# כלומר 16% מקיבולת המודל הלכה על מילים ריקות, ולכן למדע בדיוני לא נשאר
-# נושא משלו. max_df=0.5 לא סינן אף מילה (אפס!), משום שאף מילה אינה מופיעה
-# ביותר מחצי מהמסמכים, ולכן הסינון חייב להיות מפורש.
-#
-# מה שנשאר בכוונה: world, people, human, place, home, secret, life, age,
-# struggle, hope, country, death - אלה נושאיים גם אם הם נפוצים
+# i.e. 16% of model capacity went on empty words, leaving science fiction no
+# topic of its own. max_df=0.5 filtered nothing at all, since no word appears in
+# more than half the documents, so this has to be explicit.
+# Kept deliberately: world, people, human, place, home, secret, life, age,
+# struggle, hope, country, death - topical even though common
 _EMPTY_VOCABULARY = frozenset("""
 go come get take give find know want feel need tell begin bring turn help
 make look follow continue draw choose remain lead move call act reveal fill
@@ -538,15 +474,12 @@ sense group name interest good great different large strong special free
 kind late second
 """.split()) | {"new"}
 
-# "new" מוסרת בנפרד ומסיבה משלה. היא הופיעה ב-9,223 מסמכים (22%) והחזיקה
-# יחד נושא אחד שאין בו היגיון: new, york, city, update, generation,
-# testament, orleans. מדידה על הקורפוס מסבירה למה - המילה מגשרת בין
-# ארבעה דברים שאינם קשורים: New York (1,335), New Orleans (120),
-# New Testament (143), New England (159), New World (237), ו-"a new X"
-# הסתמי (2,589). זהו הומונים, ולא נושא. בלעדיה york ו-orleans אמורים
-# ליפול לנושא מקומות, ו-testament לנושא הדת
+# "new" is removed for its own reason: in 9,223 documents (22%) it held together
+# one incoherent topic (new, york, city, testament, orleans) by bridging New
+# York, New Orleans, New Testament, New England and the generic "a new X". A
+# homonym, not a topic
 
-# מה שנכנס בפועל ל-TfidfVectorizer
+# what actually goes into TfidfVectorizer
 STOPWORDS = frozenset(
     _KEYNESS_REGISTER | _BIBLIOGRAPHIC_STOPWORDS | _APPARATUS_STOPWORDS
     | _EMPTY_VOCABULARY)
@@ -554,11 +487,10 @@ STOPWORDS = frozenset(
 
 def fit_topics(df, n_topics=N_TOPICS, fit_per_decade=FIT_PER_DECADE, random_state=42):
     """
-    בונה מטריצת TF-IDF ומפרק אותה ל-W (מסמך x נושא) ו-H (נושא x מילה).
+    TF-IDF, then NMF into W (document x topic) and H (topic x word).
 
-    ה-NMF מאומן על מדגם מאוזן בין העשורים כדי שמרחב הנושאים לא ייקבע על ידי
-    העשורים הגדולים, ואז כל המסמכים מוטלים עליו (transform) כדי שהנתחים לכל
-    עשור יחושבו על כל הנתונים הזמינים.
+    Fitted on a decade-balanced sample so the topic space is not defined by the
+    largest decades, then all documents are projected onto it.
     """
     fit_idx = []
     for _, group in df.groupby("Decade"):
@@ -574,31 +506,29 @@ def fit_topics(df, n_topics=N_TOPICS, fit_per_decade=FIT_PER_DECADE, random_stat
     print(f"  TF-IDF matrix: {X_fit.shape[0]} docs x {X_fit.shape[1]} words "
           f"({len(STOPWORDS)} words blacklisted)")
 
-    # ללא רגולריזציה: sklearn מכפיל את alpha_H במספר הדגימות, כך שערך קטן
-    # לכאורה הופך לקנס L1 גדול ומאפס את H לחלוטין
+    # no regularisation: sklearn multiplies alpha_H by the number of samples,
+    # so a seemingly small value becomes a large L1 penalty and zeroes H entirely
     nmf = NMF(n_components=n_topics, init="nndsvda", random_state=random_state,
               max_iter=800, tol=1e-5)
     nmf.fit(X_fit)
 
     X_all = vectorizer.transform(df["Lemmas"])
     W = nmf.transform(X_all)
-    # נרמול לשורה כדי שכל מסמך יתפלג כאחוזים בין הנושאים
+    # row-normalise so each document distributes as percentages across topics
     row_sums = W.sum(axis=1, keepdims=True)
     W = np.divide(W, row_sums, out=np.zeros_like(W), where=row_sums > 0)
     return vectorizer, nmf, W
 
 
 def topic_labels(vectorizer, nmf, top_n=12):
-    """שם לכל נושא = המילים בעלות המשקל הגבוה ביותר בשורה שלו ב-H."""
     words = np.array(vectorizer.get_feature_names_out())
     return [", ".join(words[np.argsort(-row)[:top_n]]) for row in nmf.components_]
 
 
 def decade_profiles(df, W):
     """
-    נתח ממוצע של כל נושא בכל עשור, יחד עם רווח סמך של 95%.
-    הנתח הוא ממוצע של פרופורציות לכל מסמך, ולכן שגיאת התקן היא std/sqrt(n)
-    ורווח הסמך מצהיר בעצמו כמה דל העשור - במקום להסתיר זאת בדגימה אחידה.
+    Mean share per topic per decade, with a 95% interval. The interval states how
+    thin a decade is rather than hiding it behind uniform sampling.
     """
     means, cis, counts = {}, {}, {}
     for decade, idx in df.groupby("Decade").indices.items():
@@ -610,23 +540,20 @@ def decade_profiles(df, W):
     return means, cis, counts
 
 
-# מסמך שנשארה בו פחות ממסה כזו של תוכן אחרי הוצאת נושאי הרעש אינו ניתן
-# לנרמול: החלוקה במספר זעיר מנפחת רעש נומרי לווקטור יחידה שלם. הוא מוסר,
-# וכמותם מדווחת לפי עשור כמדד נוסף לזיהום
+# A document left with less mass than this after the artifact topics are
+# removed cannot be renormalised: dividing by a tiny number inflates numerical
+# noise into a full unit vector. It is dropped, and the count is reported per
+# decade as another measure of contamination
 _MIN_CONTENT_MASS = 0.01
 
 
 def exclude_artifacts(df, W, flagged, min_mass=_MIN_CONTENT_MASS):
     """
-    מוציא את עמודות נושאי-הרעש מ-W ומנרמל כל שורה מחדש לסכום 1.
+    Drop the artifact columns from W and renormalise each row to 1.
 
-    בלי הנרמול הנתחים היו מסתכמים בפחות מ-1 בשיעור *משתנה* בין העשורים
-    (רעש ביבליוגרפי מרוכז לפני 1900, נושא הפעלים הגנריים גדל לקראת ההווה),
-    וכל קו מגמה היה מעוות אחרת בכל קצה של ציר הזמן. אחרי הנרמול המשמעות היא
-    "מתוך הטקסט שהוא באמת תיאור של ספר, כך וכך אחוז הוא בלשי" - וזה בר-השוואה.
-
-    מחזיר (df מסונן, Wc, keep, alive). keep ממפה עמודה חדשה -> אינדקס הנושא
-    המקורי, כדי שמספרי הנושאים בפלט יישארו יציבים.
+    Without this, shares would sum to under 1 by an amount that varies across
+    decades, distorting each end of the timeline differently. Returns
+    (df, Wc, keep, alive); keep maps new column -> original topic index.
     """
     keep = [j for j in range(W.shape[1]) if j not in flagged]
     Wc = W[:, keep]
@@ -634,8 +561,8 @@ def exclude_artifacts(df, W, flagged, min_mass=_MIN_CONTENT_MASS):
     alive = row_sums[:, 0] > min_mass
     Wc = Wc[alive] / row_sums[alive]
     out = df[alive].reset_index(drop=True)
-    assert len(out) == Wc.shape[0], "df ו-W יצאו מסנכרון"
-    assert np.allclose(Wc.sum(axis=1), 1.0), "שורות שאינן מסתכמות ב-1"
+    assert len(out) == Wc.shape[0], "df and W are out of sync"
+    assert np.allclose(Wc.sum(axis=1), 1.0), "rows do not sum to 1"
     return out, Wc, keep, alive
 
 
@@ -643,12 +570,9 @@ def artifact_report(df, labels, W, flagged, alive,
                     clean_stats_path=CLEAN_STATS_PATH,
                     out_path="artifact_share_by_decade.csv"):
     """
-    מכמת כמה מכל עשור אינו תוכן ספר. זהו ממצא על המאגר, ולא אבחון פנימי:
-    זו המידה הישירה ביותר לכך שה"תקצירים" של המאה ה-19 הם ברובם טקסט שיווקי,
-    והסתייגות שצריכה להתלוות לכל שורה מוקדמת בטבלאות המגמה.
-
-    שתי מדידות בלתי תלויות: ברמת הטקסט (מה נמחק בניקוי) וברמת הנושאים
-    (הנתח המצטבר של נושאי הרעש, *לפני* הנרמול מחדש).
+    How much of each decade is not book content, measured two independent ways:
+    at the text level (what cleaning deleted) and at the topic level (artifact
+    share before renormalisation).
     """
     print("\n" + "=" * 78)
     print("Artifact topics — excluded from every number that follows")
@@ -667,11 +591,9 @@ def artifact_report(df, labels, W, flagged, alive,
     print(f"\n  {dropped} documents dropped: under {_MIN_CONTENT_MASS:.0%} content "
           f"mass once artifact topics were removed")
 
-    # פירוק לפי סוג, ולא רק סכום: המדידה הראתה שהסך הכל מטעה. הרעש
-    # הביבליוגרפי יורד לאורך הזמן (16.1% בשנות ה-1790 -> 11.4% ב-1900 ->
-    # 5.9% ב-2010) בעוד נושא הפעלים הגנריים עולה (2.6% -> 5.2% -> 14.4%),
-    # והשניים כמעט מבטלים זה את זה בסכום. זו בדיוק הסיבה שההוצאה נחוצה:
-    # כל קצה של ציר הזמן מעוות אחרת.
+    # Broken down by kind, not only summed: bibliographic noise falls over time
+    # (16.1% -> 5.9%) while the generic-verb topic rises (2.6% -> 14.4%), and
+    # the two nearly cancel in the total
     by_reason = {}
     for reason in sorted({r for r, _ in flagged.values()}):
         cols = [i for i in flagged if flagged[i][0] == reason]
@@ -715,17 +637,16 @@ def artifact_report(df, labels, W, flagged, alive,
     print(f"\n  Wrote {out_path}")
 
 
-# העשור הראשון שמוצג בטבלת המגמות. מיושר עם MIN_DECADE: אין טעם לסנן
-# עשורים מהאימון ואז להציג אותם בטבלה
+# First decade shown in the trend table. Aligned with MIN_DECADE: no point
+# filtering decades out of training and then displaying them
 TREND_FROM_DECADE = MIN_DECADE
-# עשור מוצג בטבלה רק אם יש בו לפחות כך ספרים
+# a decade is only shown if it holds at least this many books
 TREND_MIN_BOOKS = 50
-# תווי גרף זעיר להמחשת צורת המגמה
+# sparkline characters, to show the shape of a trend
 _SPARK = " ▁▂▃▄▅▆▇█"
 
 
 def _sparkline(values):
-    """גרף זעיר בשורה אחת. כל נושא מנורמל לטווח שלו עצמו, כדי שתיראה הצורה."""
     lo, hi = min(values), max(values)
     if hi <= lo:
         return _SPARK[1] * len(values)
@@ -733,45 +654,36 @@ def _sparkline(values):
     return "".join(_SPARK[max(1, round((v - lo) / (hi - lo) * span))] for v in values)
 
 
-# --- מדדים נוספים על אותה מטריצה ---
-# כל מה שמכאן ואילך מחושב מ-W הקיים ואינו משנה אף מספר שכבר מדווח.
-# ההבחנה המרכזית: "נתח" נמדד ברמת ה*מילה*, ו"שכיחות" ברמת ה*ספר*.
-# פירוט מלא של ההגדרות בסעיף "What each view measures" ב-notes_for_next_session.md
+# --- further measures over the same matrix ---
+# Everything from here is computed from the existing W and changes no number
+# already reported. The key distinction: "share" is measured at the WORD level,
+# "prevalence" at the BOOK level.
 
-# העשור שממנו ואילך המאגר מתקרב למפקד ולא למדגם שרידים. לפני 1900 יש
-# 66-984 ספרים לעשור מול 1,576-4,808 מ-1900 ואילך, והרעש הביבליוגרפי עומד
-# על 16% מול 6% בשנות ה-2010. השורות המוקדמות *נשארות* - הן נושאות את
-# האימות ההיסטורי החזק ביותר (פילוסופיה 1790, שירה רומנטית 1810, ורן 1860)
-# - אבל הן מסומנות, כדי שלא ייקראו כמדגם מייצג של מה שראה אור אז
-# כרגע MIN_DECADE=1900 ולכן אין עשורי קאנון מוצגים והסימון אינו מופיע.
-# הקבוע והלוגיקה נשארים: החזרת MIN_DECADE ל-1790 מחזירה אותם מיד
+# The decade from which the dataset resembles a census rather than a sample of
+# survivors. Earlier rows are flagged rather than dropped, so they are not read
+# as representative. With MIN_DECADE=1900 none are displayed and the flag never
+# fires; setting MIN_DECADE back to 1790 brings it straight back
 CANON_DECADE = 1900
 
-# ספי ה"ספר עוסק בנושא". אין ערך נכון יחיד, ולכן שלושה מדווחים ואחד אינו
-# נבחר בשקט: נמדד שהמגמה זהה בכולם (המתאם הדרגתי מול הנתח 0.81-0.95)
-# בעוד הרמה משתנה פי שמונה. הסף הוא ידית, לא ממצא, ולכן הוא גלוי
+# Thresholds for "this book is about this topic". Three are reported rather than
+# one chosen silently: the trend is the same under all of them (rank correlation
+# 0.81-0.95) while the level varies eightfold. A dial, not a finding
 PREVALENCE_THRESHOLDS = (0.05, 0.10, 0.20)
 PREVALENCE_HEADLINE = 0.10
 
-# מספר דגימות ה-bootstrap לרווח הסמך של ה-lift, וזרע קבוע לשחזוריות הדוח
+# bootstrap resamples for the lift interval, and a fixed seed for reproducibility
 LIFT_BOOTSTRAP = 300
 LIFT_SEED = 0
 
 
 def decade_lift(means, decades):
     """
-    עד כמה כל נושא חריג בעשור נתון, ביחס לעצמו: הנתח בעשור חלקי הנתח
-    הממוצע של אותו נושא על פני העשורים המוצגים. 1.0 = עשור טיפוסי.
+    How unusual a topic is in a decade relative to itself: its share there over
+    its mean share across displayed decades. 1.0 is typical.
 
-    למה זה נחוץ: הנושאים הגדולים גדולים בכל עשור (משפחה, אהבה, חיים
-    מופיעים כמעט בכל תקציר), ולכן "שלושת הנושאים הגדולים של העשור" כמעט
-    זהה בשנות ה-30 ובשנות ה-70. החלוקה בבסיס מבטלת את הקבועים האלה
-    ומשאירה את מה שמייחד את העשור עצמו.
-
-    הבסיס הוא ממוצע *לא משוקלל* על פני העשורים, ולא ממוצע על פני המסמכים:
-    ממוצע לפי מסמכים היה נשלט על ידי העשורים המודרניים (4,808 ספרים בשנות
-    ה-2010 מול 124 בשנות ה-1790), וכל עשור מוקדם היה יוצא "חריג" מול בסיס
-    שהוא למעשה ההווה.
+    The baseline is an unweighted mean across decades, not across documents, or it
+    would be dominated by the modern decades and every early decade would look
+    unusual against a baseline that is really the present.
     """
     matrix = np.array([means[d] for d in decades])
     base = matrix.mean(axis=0)
@@ -780,17 +692,11 @@ def decade_lift(means, decades):
 
 def decade_lift_ci(df, W, decades, n_boot=LIFT_BOOTSTRAP, seed=LIFT_SEED):
     """
-    רווח סמך ל-lift ב-bootstrap: דגימה חוזרת של ספרים *בתוך* כל עשור.
+    Bootstrap interval for lift, resampling books within each decade.
 
-    זו אינה זהירות סתמית. ניסיון קודם חישב lift על *מילים* בודדות ב-100
-    ספרים לעשור והחזיר dorothy, tarzan, templar, valerian - שמות דמויות
-    מספרים בודדים, כי למילה נדירה יש מכנה זעיר. ברמת הנושא אין את הכשל
-    הזה (נושא מצרף אלפי מילים על פני אלפי ספרים), אבל יש כשל אחר: בעשורים
-    הדקים שלפני 1900 רוחב רווח הסמך גדול פי שלושה, וכמה עשורים הם תיקו
-    אמיתי בין שלושה נושאים. לכן מדווחת *קבוצה* ולא דירוג, ונושא שרווח
-    הסמך שלו חוצה את 1.0 אינו מוצג כמייחד.
-
-    מחזיר (lo, hi) בצורת (עשורים x נושאים).
+    Needed because the thin pre-1900 decades are three times wider and several are
+    a genuine tie: a set is reported rather than a ranking, and a topic whose
+    interval crosses 1.0 is not called distinctive. Returns (lo, hi).
     """
     rng = np.random.default_rng(seed)
     dec = df["Decade"].values
@@ -807,16 +713,11 @@ def decade_lift_ci(df, W, decades, n_boot=LIFT_BOOTSTRAP, seed=LIFT_SEED):
 
 def decade_prevalence(df, W, decades, thresholds=PREVALENCE_THRESHOLDS):
     """
-    כמה מ*ספרי* העשור עוסקים בנושא - להבדיל מכמה מ*מילות* העשור שייכות לו.
+    How many of a decade's BOOKS are about a topic, as opposed to how many of its
+    WORDS belong to it.
 
-    W הוא שורה לספר ועמודה לנושא, וכל שורה מסתכמת ב-1: רומן משנת 1943
-    עשוי להיראות כך - משפחה 0.28, מלחמה 0.19, הרפתקה 0.14. הנתח מְמַצֵּעַ
-    את *עמודת* המלחמה; השכיחות *סופרת ספרים* שהתא שלהם חוצה סף.
-
-    dominant נטול-סף (הנושא הגדול ביותר של הספר) ומסתכם ב-100% בכל עשור.
-    prevalent תלוי בסף, ולכן מוחזר לכל הספים ולא רק לאחד.
-
-    מחזיר (dominant, {סף: prevalent}), שניהם בצורת (עשורים x נושאים).
+    dominant is threshold-free (each book's largest topic) and sums to 100% per
+    decade; prevalent depends on the threshold, so all three are returned.
     """
     dec = df["Decade"].values
     n_topics = W.shape[1]
@@ -833,11 +734,8 @@ def decade_prevalence(df, W, decades, thresholds=PREVALENCE_THRESHOLDS):
 
 def decade_movers(means, decades):
     """
-    מה השתנה: העלייה והירידה הגדולות ביותר בנקודות אחוז מול העשור *המוצג*
-    הקודם. אם שני עשורים מוצגים אינם רצופים, המרווח מוחזר ונדפס במפורש
-    כדי שלא תיווצר אשליה של השוואה בין עשורים סמוכים.
-
-    מחזיר {עשור: (j_עלייה, pp, j_ירידה, pp, מרווח_בשנים)}.
+    Largest rise and fall in pp against the previous DISPLAYED decade. The gap in
+    years is returned too, so non-consecutive decades are not read as adjacent.
     """
     out = {}
     for i in range(1, len(decades)):
@@ -848,23 +746,20 @@ def decade_movers(means, decades):
     return out
 
 
-# כמה נושאים מייחדים מוצגים לכל עשור. חצי מהתאים (עשור x נושא) חורגים
-# מובהקית מ-1.0, ולכן רשימה מלאה הייתה קיר של טקסט. השאר נספרים ומדווחים
+# How many distinctive topics are shown per decade. Half the (decade x topic)
+# cells depart significantly from 1.0, so a full list would be a wall of text.
+# The remainder are counted and reported
 _DIGEST_TOP = 4
 
 
 def _digest_section(df, labels, W, keep, decades, counts, means, name):
-    """
-    שני הסעיפים החדשים, שניהם מחושבים מ-W הקיים ואינם משנים אף מספר קיים:
-    "במה העשור חריג" (lift עם רווח סמך) ו"כמה מספרי העשור עוסקים בנושא".
-    """
     lift = decade_lift(means, decades)
     lo, hi = decade_lift_ci(df, W, decades)
     movers = decade_movers(means, decades)
     dominant, prevalent = decade_prevalence(df, W, decades)
     n_cols = len(keep)
     idx = {d: i for i, d in enumerate(decades)}
-    # מילה אחת לנושא: השורות כאן צפופות, ושלוש מילים לנושא הופכות אותן ללא קריאות
+    # one word per topic: these rows are dense, and three words make them unreadable
     word = {j: labels[keep[j]].split(",")[0].strip() for j in range(n_cols)}
 
     print("\n" + "=" * 78)
@@ -874,8 +769,9 @@ def _digest_section(df, labels, W, keep, decades, counts, means, name):
     print("average across the decades shown; 1.0x is a typical decade. Only topics whose")
     print("95% bootstrap CI excludes 1.0 appear. Ordered by lift but NOT ranked — where the")
     print("CIs overlap, which one is 'first' is a coin flip.")
-    # שתי השורות האלה נכונות רק כשמוצגים עשורים שלפני CANON_DECADE. עם
-    # MIN_DECADE=1900 אין כאלה, והדפסתן הייתה מייצרת אזהרה על מה שאינו בטבלה
+    # these two lines only apply when decades before CANON_DECADE are shown.
+    # With MIN_DECADE=1900 there are none, and printing them would warn about
+    # something not in the table
     if any(d < CANON_DECADE for d in decades):
         print(f"'~' marks the canon sample before {CANON_DECADE}, where CIs are ~3x wider.")
     print()
@@ -908,7 +804,7 @@ def _digest_section(df, labels, W, keep, decades, counts, means, name):
                                  lift_lo=lo[i, j], lift_hi=hi[i, j], delta_pp=pp))
     pd.DataFrame(rows).to_csv(_out("decade_digest.csv"), index=False)
 
-    # --- שכיחות ברמת הספר ---
+    # --- book-level prevalence ---
     hl = PREVALENCE_HEADLINE
     others = [t for t in PREVALENCE_THRESHOLDS if t != hl]
     print("\n" + "=" * 78)
@@ -956,18 +852,17 @@ def _digest_section(df, labels, W, keep, decades, counts, means, name):
     print("\nWrote decade_digest.csv, topic_prevalence_by_decade.csv "
           "and topic_lift_by_decade.csv")
 
-    # בדיקות שקילות פנימיות: אלה תנאים שחייבים להתקיים בהגדרה, ונפילה
-    # שלהם פירושה שהחישוב עצמו שגוי ולא שהנתונים מפתיעים
-    assert np.allclose(lift.mean(axis=0), 1.0), "lift אינו ממוצע ל-1 לכל נושא"
-    assert np.allclose(dominant.sum(axis=1), 1.0), "dominant אינו מסתכם ב-100% לעשור"
+    # internal consistency checks: these must hold by definition, and a failure
+    # means the calculation itself is wrong rather than the data being surprising
+    assert np.allclose(lift.mean(axis=0), 1.0), "lift does not average to 1 per topic"
+    assert np.allclose(dominant.sum(axis=1), 1.0), "dominant does not sum to 100% per decade"
     return lift, lo, hi, movers, dominant, prevalent
 
 
 def report(df, labels, W, keep, top_k=3):
     """
-    כל המספרים כאן הם על נושאי תוכן בלבד, אחרי נרמול מחדש. keep ממפה עמודה
-    ב-W לאינדקס הנושא המקורי, כדי שהשמות בפלט (T05 וכו') יישארו זהים לרשימת
-    הנושאים המלאה ולא ימוספרו מחדש אחרי ההוצאה.
+    Content topics only, after renormalisation. keep maps a W column to the
+    original topic index so names (T05 etc.) match the full topic list.
     """
     means, cis, counts = decade_profiles(df, W)
     n_cols = len(keep)
@@ -978,7 +873,7 @@ def report(df, labels, W, keep, top_k=3):
     for j, i in enumerate(keep):
         print(f"  T{i:02d}  {labels[i]}")
 
-    # העשורים שמספיק מיוצגים כדי שאפשר יהיה לדבר על מגמה
+    # decades represented well enough to talk about a trend
     decades = [d for d in sorted(means)
                if d >= TREND_FROM_DECADE and counts[d] >= TREND_MIN_BOOKS]
     if not decades:
@@ -986,7 +881,7 @@ def report(df, labels, W, keep, top_k=3):
         return
 
     series = {j: [means[d][j] * 100 for d in decades] for j in range(n_cols)}
-    # מיון לפי גודל התנועה: הנושאים שזזו הכי הרבה מופיעים ראשונים
+    # sorted by how much they moved: the biggest movers come first
     order = sorted(range(n_cols), key=lambda j: max(series[j]) - min(series[j]), reverse=True)
 
     short = {j: ", ".join(labels[i].split(", ")[:3]) for j, i in enumerate(keep)}
@@ -1053,36 +948,30 @@ def report(df, labels, W, keep, top_k=3):
 
 
 
-# --- ייצוא ל-PDF ---
+# --- PDF export ---
 
 PDF_PATH = "topic_trends.pdf"
 
-# מילים המסמנות נושא ש"עוסק בספר" ולא בתוכנו: טקסט של הוצאות לאור ותיאורי
-# מהדורה, שהם שריד לכך ששדה description הוא חומר שיווקי. ראו notes_for_next_session.md
-# הרשימה נכתבה מחדש אחרי הוספת STOPWORDS: 13 מתוך 16 הסמנים המקוריים
-# (edition, page, reader, text, print, classic, original...) נמחקו מאוצר
-# המילים עצמו, ולכן הם אינם יכולים להופיע באף נושא והגלאי נותר עיוור.
-# הסמנים כאן הם מילים ששרדו את הרשימה השחורה. שימו לב שכמה מהן יכולות
-# להיות תוכן בפני עצמן (write, author) - הגלאי דורש שלוש פגיעות, וההנחה
-# היא שנושא שרוב מילותיו המובילות הן אלה עוסק בספרים ולא בנושא כלשהו
+# Words marking a topic that is about the book rather than its content.
+# Rewritten after STOPWORDS was added: 13 of the original 16 markers were
+# deleted from the vocabulary itself, leaving the detector blind, so these are
+# markers that survived the blacklist. Several could be content on their own
+# (write, author), hence the three-hit requirement below
 _BIBLIOGRAPHIC_MARKERS = frozenset(
     "book books write read author writer novelist title review revise update "
     "copy publisher press chapter".split()
 )
-# מילים גנריות שיוצרות "נושא שארית" של פעלים חסרי תוכן
+# generic words that form a leftover topic of contentless verbs
 _GENERIC_MARKERS = frozenset("know want thing good come go day get take look".split())
-# כמה מילים מהמובילות בנושא צריכות להיות מסומנות כדי לפסול אותו
+# how many of a topic's top words must be flagged to disqualify it
 _ARTIFACT_MIN_HITS = 3
 
 
 def artifact_topics(labels, top_n=8):
     """
-    מזהה נושאי-רעש לפי המילים המובילות שלהם ולא לפי מספרם.
-    מספור הנושאים ב-NMF אינו יציב בין ריצות, ולכן אסור לקבע אינדקסים.
-
-    מחזיר {אינדקס: (סיבה, המילים שהופעלו)}. המילים המפעילות מוחזרות ונדפסות
-    כדי שההחלטה תהיה ניתנת לביקורת - הרשימות למעלה נכתבו ביד, והן החוליה
-    החלשה בשלב הזה.
+    Identify artifact topics by their top words, never by index - NMF numbering
+    is not stable between runs. Returns {index: (reason, words that fired)} so the
+    decision can be audited.
     """
     flagged = {}
     for i, label in enumerate(labels):
@@ -1098,9 +987,8 @@ def artifact_topics(labels, top_n=8):
 
 def export_pdf(df, labels, W, keep, flagged, df_raw, W_raw, path=PDF_PATH):
     """
-    כותב דוח מאויר על נושאי התוכן בלבד: גרפי מגמה, מפת חום וטבלת מספרים.
-    נושאי הרעש אינם מופיעים בעמודי המגמה כלל, אלא בעמוד סיכום נפרד - הגודל
-    שלהם הוא ממצא על המאגר, ולכן הוא מוצג ולא מוסתר.
+    Illustrated report over the content topics. Artifact topics appear only on a
+    separate summary page: their size is a finding, so it is shown not hidden.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -1118,7 +1006,7 @@ def export_pdf(df, labels, W, keep, flagged, df_raw, W_raw, path=PDF_PATH):
     short = {j: ", ".join(labels[keep[j]].split(", ")[:3]) for j in range(n_cols)}
 
     with PdfPages(_out(path)) as pdf:
-        # עמוד 1: כותרת ורשימת נושאי התוכן
+        # page 1: title and the list of content topics
         fig = plt.figure(figsize=(11.7, 8.3))
         fig.text(.06, .94, "Book themes by decade", size=22, weight="bold")
         fig.text(.06, .90,
@@ -1135,9 +1023,10 @@ def export_pdf(df, labels, W, keep, flagged, df_raw, W_raw, path=PDF_PATH):
             y -= .0285
         pdf.savefig(fig); plt.close(fig)
 
-        # עמוד 2: גרף קטן לכל נושא, כולל נושאי הרעש המסומנים בכוכבית.
-        # נושאי הרעש מוצגים מתוך W הגולמי - הם אינם קיימים במטריצה המנורמלת -
-        # ולכן שתי הסקאלות שונות, וזה נאמר במפורש בתחתית העמוד.
+        # page 2: one small plot per topic, including the artifact topics
+        # marked with an asterisk. Artifact topics are drawn from the raw W -
+        # they do not exist in the renormalised matrix - so the two scales
+        # differ, which is stated explicitly at the foot of the page.
         raw_means, raw_cis, raw_counts = decade_profiles(df_raw, W_raw)
         panels = [("content", j, keep[j], series[j], errors[j]) for j in order]
         for i in sorted(flagged):
@@ -1156,7 +1045,7 @@ def export_pdf(df, labels, W, keep, flagged, df_raw, W_raw, path=PDF_PATH):
                  size=8.5, ha="center", color="#444")
         for ax, (kind, _, tid, vals, errs) in zip(axes.ravel(), panels):
             colour = "#c0392b" if kind == "artifact" else "#2c6fbb"
-            # הצללה על העשורים שהם מדגם קאנון ולא מפקד
+            # shade the decades that are a canon sample rather than a census
             if decades[0] < CANON_DECADE:
                 ax.axvspan(decades[0], CANON_DECADE, color="#000000", alpha=.055, lw=0)
             ax.plot(decades, vals, lw=1.6, color=colour)
@@ -1185,11 +1074,11 @@ def export_pdf(df, labels, W, keep, flagged, df_raw, W_raw, path=PDF_PATH):
         fig.tight_layout(rect=[0, .035, 1, .95])
         pdf.savefig(fig); plt.close(fig)
 
-        # עמוד 3: מפת חום של כל המטריצה
+        # page 3: heatmap of the whole matrix
         fig, ax = plt.subplots(figsize=(11.7, 8.3))
         matrix = np.array([series[j] for j in order])
-        # נרמול לכל שורה, כדי שנושאים קטנים לא ייעלמו מול הגדולים.
-        # נושא שטוח לחלוטין היה מייצר חלוקה באפס ושורה ריקה במפה
+        # normalise per row so small topics do not vanish beside large ones.
+        # a perfectly flat topic would divide by zero and leave an empty row
         spread = np.ptp(matrix, axis=1, keepdims=True)
         norm = (matrix - matrix.min(axis=1, keepdims=True)) / np.where(spread == 0, 1, spread)
         im = ax.imshow(norm, aspect="auto", cmap="magma")
@@ -1204,7 +1093,7 @@ def export_pdf(df, labels, W, keep, flagged, df_raw, W_raw, path=PDF_PATH):
         fig.tight_layout()
         pdf.savefig(fig); plt.close(fig)
 
-        # עמוד 4: הטבלה המספרית
+        # page 4: the numeric table
         fig = plt.figure(figsize=(11.7, 8.3))
         fig.text(.5, .965, "Share of each decade's content text (%)", size=13,
                  weight="bold", ha="center")
@@ -1220,8 +1109,9 @@ def export_pdf(df, labels, W, keep, flagged, df_raw, W_raw, path=PDF_PATH):
         fig.text(.03, .90, "\n".join(lines), family="monospace", size=6.2, va="top")
         pdf.savefig(fig); plt.close(fig)
 
-        # עמוד 5: הדיג'סט - מה ייחד כל עשור ומה השתנה בו.
-        # זהו העמוד שעונה על "מה העשור הזה אומר לי", להבדיל מ"מתי נושא היה נפוץ"
+        # page 5: the digest - what was distinctive about each decade and what
+        # changed in it. This is the page answering "what does this decade tell
+        # me", as opposed to "when was a topic common"
         lift = decade_lift(means, decades)
         lo, hi = decade_lift_ci(df, W, decades)
         movers = decade_movers(means, decades)
@@ -1256,7 +1146,7 @@ def export_pdf(df, labels, W, keep, flagged, df_raw, W_raw, path=PDF_PATH):
                      size=7.5, ha="center", color="#444")
         pdf.savefig(fig); plt.close(fig)
 
-        # עמוד 6: הרעש שהוצא, לפני הנרמול מחדש
+        # page 6: the noise that was removed, before renormalisation
         if flagged:
             raw_means, _, raw_counts = decade_profiles(df_raw, W_raw)
             rdec = [d for d in sorted(raw_means)
@@ -1288,14 +1178,15 @@ def export_pdf(df, labels, W, keep, flagged, df_raw, W_raw, path=PDF_PATH):
 
 
 def main(source="goodreads"):
-    """source='goodreads' (ברירת המחדל) או 'cmu' לריצת הביקורת."""
+    """source='goodreads' (default), or 'cmu' for the control run."""
     global OUT_DIR
     if source == "cmu":
         OUT_DIR = "cmu_control"
         df = build_cmu_corpus()
     else:
-        # בלי הבדיקה הזו ריצה על מחשב נקי הייתה בונה כאן קורפוס *ללא*
-        # bounding ושומרת אותו תחת השם של הקורפוס החתוך, בשקט מוחלט
+        # without this check, a run on a clean machine would build a corpus
+        # WITHOUT bounding here and save it under the bounded corpus's name,
+        # completely silently
         if not os.path.exists(CACHE_PATH):
             raise SystemExit(
                 f"{CACHE_PATH} is missing. Build it first:\n"
@@ -1309,7 +1200,7 @@ def main(source="goodreads"):
     labels = topic_labels(vectorizer, nmf)
     flagged = artifact_topics(labels)
 
-    # סדר קריטי: המדידה של הרעש נעשית על W הגולמי, לפני הנרמול מחדש
+    # order matters: the noise is measured on the raw W, before renormalisation
     dfc, Wc, keep, alive = exclude_artifacts(df, W, flagged)
     artifact_report(df, labels, W, flagged, alive)
     report(dfc, labels, Wc, keep)
