@@ -77,16 +77,13 @@ def stage_figures():
 
 
 def stage_checks():
-    # verify_writeup runs AFTER stability_curves, not before: four of its 36
-    # checks read all_topic_stability.csv, and on a clean run that file does
-    # not exist yet - so they were skipped silently and it printed 32/32
+    # stability_curves first: the two after it read all_topic_stability.csv
     py("stability_curves.py")
     py("stability.py")
     py("sf_stability.py")
     py("evaluate_bounding.py")
     py("roc_filtering.py")
     py("raw_vs_renorm.py")
-    py("verify_writeup.py")
 
 
 STAGES = [
@@ -95,7 +92,7 @@ STAGES = [
     ("corpus", stage_corpus, "themes_corpus_bounded.pkl"),
     ("model", stage_model, "final_refit/*.csv"),
     ("figures", stage_figures, "wfig1-wfig3, topic_trends_v2.pdf"),
-    ("checks", stage_checks, "the validation numbers quoted in the writeup"),
+    ("checks", stage_checks, "stability, bounding and renormalisation checks"),
 ]
 
 

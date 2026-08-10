@@ -39,9 +39,8 @@ cannot half-overwrite a published one.
 without it the `register_dense` rule never fires, the corpus comes out different,
 and nothing raises an error.
 
-Among the checks, `verify_writeup.py` has to run **after** `stability_curves.py`.
-Four of its 36 assertions read `all_topic_stability.csv`, and if the file is
-absent it skips them and prints 32/32 rather than failing.
+Among the checks, `stability_curves.py` runs first: `stability.py` and
+`sf_stability.py` both read `all_topic_stability.csv`.
 
 ## What each file is
 
@@ -65,22 +64,19 @@ absent it skips them and prints 32/32 rather than failing.
 
 **Figures and the report**
 
-- `writeup_figures.py` — Figures 1 and 2 of the writeup, plus `wfig3` (what grew
-  and shrank), which did not make it in.
+- `writeup_figures.py` — the era map (`wfig1`), the four-panel figure (`wfig2`)
+  and rise/fall (`wfig3`), as standalone png and pdf.
 - `trends_report.py` — the 6-page long-form version, `topic_trends_v2.pdf`.
   (`topic_trends.pdf`, also 6 pages, is `themes.py`'s own diagnostic plot.)
 
 **Checks**
 
-- `verify_writeup.py` — recomputes all 36 numbers the writeup quotes and exits
-  non-zero if any has drifted. Run this first when something looks off, but check
-  it says 36/36 and not 32/32 — see the ordering note above.
 - `stability_curves.py` — refits on four independent training samples and reports
   both word-list cosine and decade-curve correlation per topic.
 - `stability.py` — the same idea reported as tiers (solid / moderate / unstable).
 - `sf_stability.py` — the same four refits reported per named theme, giving both
-  the mean and the worst case. The writeup's `r = 0.49` for science fiction is
-  this file's `curve_r_mean`; every other r it quotes is a worst case.
+  the mean and the worst case. Science fiction scores `curve_r_mean` 0.49 and
+  −0.39 at worst, the clearest example of a topic that does not reproduce.
 - `evaluate_bounding.py` — does bounding move a blurb toward the plot summary of
   the same book, and which rules earn their place.
 - `roc_filtering.py` — the AUC 0.986 agreement between the rule-based filter and

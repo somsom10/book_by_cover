@@ -15,3 +15,8 @@ __pycache__/
 # year_genre_prediction: its dataset and its trained models / figures
 year_genre_prediction/data/
 year_genre_prediction/outputs/
+
+# themes: its raw data (the 2 GB archive lives here and comention/ expands
+# from it) and everything its pipeline generates
+themes/data/
+themes/work/

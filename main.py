@@ -1,21 +1,28 @@
-"""Run the whole project: fetch the data, then both pipelines.
+"""Run the whole project: fetch the data, then every pipeline.
 
     python3 main.py                  # everything, in order
     python3 main.py --check          # what data is present; runs nothing
     python3 main.py --skip-download  # data is already in place
-    python3 main.py --only year_genre|comention
+    python3 main.py --only year_genre|comention|themes
 
-Two independent pipelines on two different datasets:
+Three independent pipelines on the same two datasets:
 
     year_genre_prediction/   CMU plot summaries -> genre and publication-year
                              models. Needs booksummaries.txt (16 MB).
     comention/               Goodreads blurbs -> author co-mention communities.
                              Needs the two Goodreads dumps (~10 GB).
+    themes/                  Goodreads blurbs -> themes by decade, NMF on
+                             TF-IDF. Needs the Goodreads archive, the works
+                             file and booksummaries.txt.
 
-Neither reads the other's data, so `--only` runs one without fetching the
-other's inputs. Each pipeline decides for itself what is already up to date:
-comention/main.py skips stages whose outputs are current, and re-running is
-cheap once the heavy stages have run.
+No pipeline reads another's outputs, so `--only` runs one and fetches just its
+inputs. Where two pipelines want the same source file, download/fetch_data.py
+gets it once - see its docstring.
+
+themes/ is run through its own orchestrator, starting after its download stage
+because the data is already in place by then. Each pipeline decides for itself
+what is up to date: comention/main.py skips stages whose outputs are current,
+and themes/run_all.py reuses its corpus cache.
 """
 import argparse
 import subprocess
@@ -30,6 +37,10 @@ PIPELINES = {
     "year_genre": ("year_genre_prediction",
                    ["main.py", "--data", "data/booksummaries.txt"], "cmu"),
     "comention": ("comention", ["main.py"], None),
+    # --from keyness skips themes' own download stage: fetch_data.py has
+    # already put the three files in themes/data/, and running the stage would
+    # only re-verify them
+    "themes": ("themes", ["run_all.py", "--from", "keyness"], "themes"),
 }
 
 
@@ -69,8 +80,8 @@ def main():
         d, argv, _ = PIPELINES[key]
         run(argv, ROOT / d, key)
 
-    print("\nDone. Figures and outputs are in year_genre_prediction/outputs/ "
-          "and comention/.")
+    print("\nDone. Figures and outputs are in year_genre_prediction/outputs/, "
+          "comention/ and themes/work/.")
 
 
 if __name__ == "__main__":
